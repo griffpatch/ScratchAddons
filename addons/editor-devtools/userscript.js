@@ -1,23 +1,33 @@
 import DevTools from "./DevTools.js";
 
 export default async function ({ addon, global, console, msg, safeMsg: m }) {
-  // Scratch Addons: do not run if extension is already enabled
-
   // noinspection JSUnresolvedVariable
-  if (window.initGUI) {
+  if (
+    window.initGUI ||
+    (!addon.self._isDevtoolsExtension && document.head.classList.contains("griffpatchDevtoolsExtensionEnabled"))
+  ) {
+    console.log("Extension running, stopping addon");
     return;
   }
 
   // 0-indexed 6 = July
-  const releaseDate = new Date(2020, 6, 4);
-  const releaseDateLocalized = new Intl.DateTimeFormat(scratchAddons.l10n.locale).format(releaseDate);
+  const releaseDate = new Date(2021, 1, 8);
+  const releaseDateLocalized = new Intl.DateTimeFormat(msg.locale).format(releaseDate);
 
   const helpHTML = `
-<div id="s3devHelpPop">
-<div>
-<h1><strong>${m("help-title")}</strong></h1>
+<div id="s3devHelpPop" class="modal_modal-overlay_1Lcbx">
+<div class="modal_modal-content_1h3ll">
+<div class="modal_header_1h7ps">
+  <div class="modal_header-item_2zQTd modal_header-item-title_tLOU5">${m("help-title")}</div>
+  <div class="modal_header-item_2zQTd modal_header-item-close_2XDeL">
+    <div class="close-button close-button_close-button_lOp2G close-button_large_2oadS">
+	  <img class="close-button_close-icon_HBCuO" src="/static/assets/cb666b99d3528f91b52f985dfb102afa.svg">
+	</div>
+  </div>
+</div>
+<div id="s3devHelpContent">
 <p>${m("version", {
-    version: "0.2.4",
+    version: "1.9.0",
     date: releaseDateLocalized,
     ndash: "&ndash;",
     url: '<a target="_blank" rel="noreferrer noopener" href="https://www.youtube.com/griffpatch">Griffpatch</a>',
@@ -46,6 +56,7 @@ export default async function ({ addon, global, console, msg, safeMsg: m }) {
 <p>${m(
     "youtube"
   )} -&nbsp;<a target="_blank" href="https://www.youtube.com/griffpatch">https://www.youtube.com/user/griffpatch</a></p>
+</div>
 </div>
 </div>
 `;
