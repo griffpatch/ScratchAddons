@@ -5,6 +5,7 @@ import BlockInstance from "./BlockInstance.js";
 import XML from "./XML.js";
 import BlockItem from "./BlockItem.js";
 import UndoGroup from "./blockly/UndoGroup.js";
+import BOMProject from "./bom/BOMProject.js";
 
 export default class DevTools {
   constructor(addon, msg, m, helpHTML) {
@@ -991,6 +992,7 @@ export default class DevTools {
       if (sel.length === 0) {
         this.navigateFilter(1);
       }
+      // noinspection JSUnresolvedFunction
       document.activeElement.blur();
       e.preventDefault();
       return;
@@ -1002,6 +1004,7 @@ export default class DevTools {
         this.findInp.value = ""; // Clear search first, then close on second press
         this.inputChange(e);
       } else {
+        // noinspection JSUnresolvedFunction
         document.activeElement.blur();
       }
       e.preventDefault();
@@ -2213,11 +2216,17 @@ export default class DevTools {
       );
 
       this.domHelpers.bindOnce(document, "keydown", (...e) => this.eventKeyDown(...e), true);
+
+      BOMProject.init(this.addon);
     }
 
     this.domHelpers.bindOnce(document, "mousemove", (...e) => this.eventMouseMove(...e), true);
     this.domHelpers.bindOnce(document, "mousedown", (...e) => this.eventMouseDown(...e), true); // true to capture all mouse downs 'before' the dom events handle them
-    // bindOnce(document.getElementById("s3devDeep"), "click", deepSearch);
+    this.domHelpers.bindOnce(
+      document.getElementById("s3devDeep"),
+      "click",
+      (...e) => new BOMProject(this.vm, this.utils)
+    );
     // bindOnce(document.getElementById('s3devCleanUp'),'click', clickCleanUp);
     // bindOnce(document.getElementById("s3devInject"), "click", clickInject);
     // bindOnce(document.getElementById('s3devReplace'), 'click', clickReplace);
@@ -2295,3 +2304,46 @@ let prevVal = "";
 function enc(str) {
   return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+
+/*
+
+Click into Finder Box
+* Enter "hello" - Displays all events, variables, and strings containing "hello"
+  * Option to expand to find all (across sprites)
+
+* Default view - List of all hat blocks in current sprite
+* Filter view - Current sprite at top followed by grouped off per sprite, categorised by usage type
+
+example:
+
+Find "pla x" (i.e. "Player X")
+==============================
+>Sprite: Player    23
+>>Set Player      < 4 >
+>>Change Player     7
+>>(Player)         12
+------------------------------
+>Sprite:
+
+
+or ----------
+
+Find "pla"
+Var: Player X      21 / 59    (21 in this sprite out of 59 references in other sprites)
+Block: Play note..   1 / 1
+Text: Play           2 / 3    (2 plain text reference out of 3)
+Text: Plants         1 / 1    (1 plain text reference out of 1)
+
+>> Select "Player X" >>>
+
+"(Player X) " x   <- clear button
+This Sprite         21
+ |- Set Player X     5
+ |- Change Player X  3
+ |- (Player X)      13
+Next Sprite          9
+ |- Set Player X     1
+ |- (Player X)       5
+ 
+
+ */
