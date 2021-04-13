@@ -9,8 +9,10 @@ import Tab from "./Tab.js";
 export default class UserscriptAddon extends Addon {
   constructor(info) {
     super(info);
-    this.__path = document.getElementById("scratch-addons").getAttribute("data-path");
+    this._addonId = info.id;
+    this.__path = `${new URL(import.meta.url).origin}/`;
     this.tab = new Tab(info);
+    this.self.disabled = false;
   }
 
   /**

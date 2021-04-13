@@ -1,42 +1,153 @@
 import runAddonUserscripts from "./run-userscript.js";
 import Localization from "./l10n.js";
 
-const template = document.getElementById("scratch-addons");
-const getGlobalState = () => {
-  const returnValue = JSON.parse(template.getAttribute("data-global-state"));
-  template.removeAttribute("data-global-state");
-  return returnValue;
-};
-
-const getL10NURLs = () => {
-  const returnValue = JSON.parse(template.getAttribute("data-l10njson"));
-  template.removeAttribute("data-l10njson");
-  return returnValue;
-};
-
-const addons = JSON.parse(template.getAttribute("data-userscripts"));
-
 window.scratchAddons = {};
-scratchAddons.globalState = getGlobalState();
-scratchAddons.l10n = new Localization(getL10NURLs());
-scratchAddons.eventTargets = {
-  auth: [],
-  settings: [],
-  tab: [],
-};
 scratchAddons.classNames = { loaded: false };
 
 const pendingPromises = {};
 pendingPromises.msgCount = [];
 
-scratchAddons.methods = {};
-scratchAddons.methods.getMsgCount = () => {
-  template.setAttribute(`data-request-msgcount__${Date.now()}`, "");
-  let promiseResolver;
-  const promise = new Promise((resolve) => (promiseResolver = resolve));
-  pendingPromises.msgCount.push(promiseResolver);
-  return promise;
+const comlinkIframe1 = document.getElementById("scratchaddons-iframe-1");
+const comlinkIframe2 = document.getElementById("scratchaddons-iframe-2");
+const comlinkIframe3 = document.getElementById("scratchaddons-iframe-3");
+const comlinkIframe4 = document.getElementById("scratchaddons-iframe-4");
+const _cs_ = Comlink.wrap(Comlink.windowEndpoint(comlinkIframe2.contentWindow, comlinkIframe1.contentWindow));
+
+const page = {
+  _globalState: null,
+  get globalState() {
+    return this._globalState;
+  },
+  set globalState(val) {
+    this._globalState = scratchAddons.globalState = val;
+  },
+
+  l10njson: null, // Only set once
+  addonsWithUserscripts: null, // Only set once
+
+  _dataReady: false,
+  get dataReady() {
+    return this._dataReady;
+  },
+  set dataReady(val) {
+    this._dataReady = val;
+    onDataReady(); // Assume set to true
+  },
+
+  fireEvent(info) {
+    if (info.addonId) {
+      // Addon specific events, like settings change and self disabled
+      const eventTarget = scratchAddons.eventTargets[info.target].find(
+        (eventTarget) => eventTarget._addonId === info.addonId
+      );
+      if (eventTarget) eventTarget.dispatchEvent(new CustomEvent(info.name));
+    } else {
+      // Global events, like auth change
+      scratchAddons.eventTargets[info.target].forEach((eventTarget) =>
+        eventTarget.dispatchEvent(new CustomEvent(info.name))
+      );
+    }
+  },
+  setMsgCount({ count }) {
+    pendingPromises.msgCount.forEach((promiseResolver) => promiseResolver(count));
+    pendingPromises.msgCount = [];
+  },
 };
+Comlink.expose(page, Comlink.windowEndpoint(comlinkIframe4.contentWindow, comlinkIframe3.contentWindow));
+
+class SharedObserver {
+  constructor() {
+    this.inactive = true;
+    this.pending = new Set();
+    this.observer = new MutationObserver((mutation, observer) => {
+      for (const item of this.pending) {
+        for (const match of document.querySelectorAll(item.query)) {
+          if (item.seen) {
+            if (item.seen.has(match)) continue;
+            item.seen.add(match);
+          }
+          this.pending.delete(item);
+          item.resolve(match);
+          break;
+        }
+      }
+      if (this.pending.size === 0) {
+        this.inactive = true;
+        this.observer.disconnect();
+      }
+    });
+  }
+
+  /**
+   * Watches an element.
+   * @param {object} opts - options
+   * @param {string} opts.query - query.
+   * @param {WeakSet=} opts.seen - a WeakSet that tracks whether an element has alreay been seen.
+   * @returns {Promise<Node>} Promise that is resolved with modified element.
+   */
+  watch(opts) {
+    if (this.inactive) {
+      this.inactive = false;
+      this.observer.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+      });
+    }
+    return new Promise((resolve) =>
+      this.pending.add({
+        resolve,
+        ...opts,
+      })
+    );
+  }
+}
+
+function onDataReady() {
+  const addons = page.addonsWithUserscripts;
+
+  scratchAddons.l10n = new Localization(page.l10njson);
+  scratchAddons.eventTargets = {
+    auth: [],
+    settings: [],
+    tab: [],
+    self: [],
+  };
+
+  scratchAddons.methods = {};
+  scratchAddons.methods.getMsgCount = () => {
+    if (!pendingPromises.msgCount.length) _cs_.requestMsgCount();
+    let promiseResolver;
+    const promise = new Promise((resolve) => (promiseResolver = resolve));
+    pendingPromises.msgCount.push(promiseResolver);
+    return promise;
+  };
+  scratchAddons.methods.copyImage = async (dataURL) => {
+    return _cs_.copyImage(dataURL);
+  };
+
+  scratchAddons.sharedObserver = new SharedObserver();
+
+  const runUserscripts = () => {
+    for (const addon of addons) {
+      if (addon.scripts.length) runAddonUserscripts(addon);
+    }
+  };
+
+  // Note: we currently load userscripts and locales after head loaded
+  // We could do that before head loaded just fine, as long as we don't
+  // actually *run* the addons before document.head is defined.
+  if (document.head) runUserscripts();
+  else {
+    const observer = new MutationObserver(() => {
+      if (document.head) {
+        runUserscripts();
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.documentElement, { subtree: true, childList: true });
+  }
+}
 
 function bodyIsEditorClassCheck() {
   const pathname = location.pathname.toLowerCase();
@@ -72,44 +183,6 @@ history.pushState = function () {
   return returnValue;
 };
 
-const observer = new MutationObserver((mutationsList) => {
-  for (const mutation of mutationsList) {
-    const attr = mutation.attributeName;
-    const attrType = attr.substring(0, attr.indexOf("__"));
-    const attrRawVal = template.getAttribute(attr);
-    let attrVal;
-    try {
-      attrVal = JSON.parse(attrRawVal);
-    } catch (err) {
-      attrVal = attrRawVal;
-    }
-    if (attrVal === null) return;
-    const removeAttr = () => template.removeAttribute(attr);
-    if (attr === "data-global-state") scratchAddons.globalState = getGlobalState();
-    else if (attr === "data-msgcount") {
-      pendingPromises.msgCount.forEach((promiseResolver) => promiseResolver(attrVal));
-      pendingPromises.msgCount = [];
-      removeAttr();
-    } else if (attrType === "data-fire-event") {
-      if (attrVal.addonId) {
-        const settingsEventTarget = scratchAddons.eventTargets.settings.find(
-          (eventTarget) => eventTarget._addonId === attrVal.addonId
-        );
-        if (settingsEventTarget) settingsEventTarget.dispatchEvent(new CustomEvent("change"));
-      } else
-        scratchAddons.eventTargets[attrVal.target].forEach((eventTarget) =>
-          eventTarget.dispatchEvent(new CustomEvent(attrVal.name))
-        );
-      removeAttr();
-    }
-  }
-});
-observer.observe(template, { attributes: true });
-
-for (const addon of addons) {
-  if (addon.scripts.length) runAddonUserscripts(addon);
-}
-
 function loadClasses() {
   scratchAddons.classNames.arr = [
     ...new Set(
@@ -140,19 +213,28 @@ function loadClasses() {
     ),
   ];
   scratchAddons.classNames.loaded = true;
-  document.querySelectorAll("[class*='scratchAddonsScratchClass/']").forEach((el) => {
-    [...el.classList]
-      .filter((className) => className.startsWith("scratchAddonsScratchClass"))
-      .map((className) => className.substring(className.indexOf("/") + 1))
-      .forEach((classNameToFind) =>
-        el.classList.replace(
-          `scratchAddonsScratchClass/${classNameToFind}`,
-          scratchAddons.classNames.arr.find(
-            (className) =>
-              className.startsWith(classNameToFind + "_") && className.length === classNameToFind.length + 6
-          ) || `scratchAddonsScratchClass/${classNameToFind}`
-        )
-      );
+
+  const fixPlaceHolderClasses = () =>
+    document.querySelectorAll("[class*='scratchAddonsScratchClass/']").forEach((el) => {
+      [...el.classList]
+        .filter((className) => className.startsWith("scratchAddonsScratchClass"))
+        .map((className) => className.substring(className.indexOf("/") + 1))
+        .forEach((classNameToFind) =>
+          el.classList.replace(
+            `scratchAddonsScratchClass/${classNameToFind}`,
+            scratchAddons.classNames.arr.find(
+              (className) =>
+                className.startsWith(classNameToFind + "_") && className.length === classNameToFind.length + 6
+            ) || `scratchAddonsScratchClass/${classNameToFind}`
+          )
+        );
+    });
+
+  fixPlaceHolderClasses();
+  new MutationObserver(() => fixPlaceHolderClasses()).observe(document.documentElement, {
+    attributes: false,
+    childList: true,
+    subtree: true,
   });
 }
 
@@ -164,5 +246,5 @@ else {
       loadClasses();
     }
   });
-  stylesObserver.observe(document.head, { childList: true });
+  stylesObserver.observe(document.documentElement, { childList: true, subtree: true });
 }

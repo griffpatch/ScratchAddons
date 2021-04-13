@@ -4,9 +4,69 @@ try {
   throw "Scratch Addons: not first party iframe";
 }
 
+chrome.runtime.sendMessage({ contentScriptReady: { url: location.href } }, (res) => {
+  if (res) onInfoAvailable(res);
+});
+
 const DOLLARS = ["$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8", "$9"];
 
 const promisify = (callbackFn) => (...args) => new Promise((resolve) => callbackFn(...args, resolve));
+
+let _page_ = null;
+
+const comlinkIframesDiv = document.createElement("div");
+comlinkIframesDiv.id = "scratchaddons-iframes";
+const comlinkIframe1 = document.createElement("iframe");
+comlinkIframe1.id = "scratchaddons-iframe-1";
+comlinkIframe1.style.display = "none";
+const comlinkIframe2 = comlinkIframe1.cloneNode();
+comlinkIframe2.id = "scratchaddons-iframe-2";
+const comlinkIframe3 = comlinkIframe1.cloneNode();
+comlinkIframe3.id = "scratchaddons-iframe-3";
+const comlinkIframe4 = comlinkIframe1.cloneNode();
+comlinkIframe4.id = "scratchaddons-iframe-4";
+comlinkIframesDiv.appendChild(comlinkIframe1);
+comlinkIframesDiv.appendChild(comlinkIframe2);
+comlinkIframesDiv.appendChild(comlinkIframe3);
+comlinkIframesDiv.appendChild(comlinkIframe4);
+document.documentElement.appendChild(comlinkIframesDiv);
+
+const cs = {
+  requestMsgCount() {
+    chrome.runtime.sendMessage("getMsgCount");
+  },
+  copyImage(dataURL) {
+    // Firefox only
+    return new Promise((resolve, reject) => {
+      browser.runtime.sendMessage({ clipboardDataURL: dataURL }).then(
+        (res) => {
+          resolve();
+        },
+        (res) => {
+          reject(res.toString());
+        }
+      );
+    });
+  },
+};
+Comlink.expose(cs, Comlink.windowEndpoint(comlinkIframe1.contentWindow, comlinkIframe2.contentWindow));
+
+const pageComlinkScript = document.createElement("script");
+pageComlinkScript.src = chrome.runtime.getURL("libraries/comlink.js");
+document.documentElement.appendChild(pageComlinkScript);
+
+const moduleScript = document.createElement("script");
+moduleScript.type = "module";
+moduleScript.src = chrome.runtime.getURL("content-scripts/inject/module.js");
+
+(async () => {
+  await new Promise((resolve) => {
+    moduleScript.addEventListener("load", resolve);
+  });
+  _page_ = Comlink.wrap(Comlink.windowEndpoint(comlinkIframe3.contentWindow, comlinkIframe4.contentWindow));
+})();
+
+document.documentElement.appendChild(moduleScript);
 
 let initialUrl = location.href;
 let path = new URL(initialUrl).pathname.substring(1);
@@ -17,6 +77,25 @@ if (pathArr[0] === "scratch-addons-extension") {
 }
 if (path === "discuss/3/topic/add/") {
   window.addEventListener("load", () => forumWarning("forumWarning"));
+  let uaElemModified = false;
+  const modifyUAElem = () => {
+    if (uaElemModified) return;
+    const uaElem = document.getElementById("simple-user-agent");
+    if (uaElem) {
+      uaElem.textContent = uaElem.textContent.replace("My browser", "My web browser");
+      return (uaElemModified = true);
+    }
+  };
+  if (!modifyUAElem()) {
+    new MutationObserver((mutationsList, observer) => {
+      if (modifyUAElem()) {
+        observer.disconnect();
+      }
+    }).observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+    });
+  }
 } else if (path.startsWith("discuss/topic/")) {
   window.addEventListener("load", () => {
     if (document.querySelector('div.linkst > ul > li > a[href="/discuss/18/"]')) {
@@ -25,54 +104,34 @@ if (path === "discuss/3/topic/add/") {
   });
 }
 
-let receivedContentScriptInfo = false;
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log("[Message from background]", request);
-  if (request.contentScriptInfo) {
-    // The request wasn't for this exact URL, might happen sometimes
-    if (request.contentScriptInfo.url !== initialUrl) return;
-    // Only run once - updates go through themesUpdated
-    if (receivedContentScriptInfo) return;
-    receivedContentScriptInfo = true;
-    sendResponse("OK");
-
-    if (document.head) onHeadAvailable(request.contentScriptInfo);
-    else {
-      const observer = new MutationObserver(() => {
-        if (document.head) {
-          onHeadAvailable(request.contentScriptInfo);
-          observer.disconnect();
-        }
-      });
-      observer.observe(document.documentElement, { subtree: true, childList: true });
-    }
-  } else if (request === "getInitialUrl") {
+  if (request === "getInitialUrl") {
     sendResponse(initialUrl);
   } else if (request.themesUpdated) {
     injectUserstylesAndThemes({ themes: request.themesUpdated, isUpdate: true });
   }
 });
-chrome.runtime.sendMessage("ready");
-window.addEventListener("load", () => {
-  if (!receivedContentScriptInfo) {
-    // This might happen sometimes, the background page might not
-    // have seen this tab loading, for example, at startup.
-    chrome.runtime.sendMessage("sendContentScriptInfo");
-  }
-});
 
-function injectUserstylesAndThemes({ userstyleUrls, themes, isUpdate }) {
+// Store all themes that were enabled this session
+const sessionEnabledThemes = new Set();
+
+function injectUserstylesAndThemes({ addonsWithUserstyles = [], themes, isUpdate }) {
   document.querySelectorAll(".scratch-addons-theme").forEach((style) => {
     if (!style.textContent.startsWith("/* sa-autoupdate-theme-ignore */")) style.remove();
   });
-  for (const userstyleUrl of userstyleUrls || []) {
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = userstyleUrl;
-    if (document.body) document.documentElement.insertBefore(link, document.body);
-    else document.documentElement.appendChild(link);
+  const userstyles = addonsWithUserstyles.map((addon) => addon.styles);
+  for (const addon of userstyles || []) {
+    for (const userstyle of addon) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = userstyle.url;
+      if (document.body) document.documentElement.insertBefore(link, document.body);
+      else document.documentElement.appendChild(link);
+    }
   }
   for (const theme of themes) {
+    sessionEnabledThemes.add(theme.addonId);
     for (const styleUrl of theme.styleUrls) {
       let css = theme.styles[styleUrl];
       // Replace %addon-self-dir% for relative URLs
@@ -104,79 +163,56 @@ function setCssVariables(addonSettings) {
   }
 }
 
-function onHeadAvailable({ globalState, l10njson, addonsWithUserscripts, userstyleUrls, themes }) {
+async function onInfoAvailable({ globalState, l10njson, addonsWithUserscripts, addonsWithUserstyles, themes }) {
   setCssVariables(globalState.addonSettings);
-  injectUserstylesAndThemes({ userstyleUrls, themes, isUpdate: false });
+  // Just in case, make sure the <head> loaded before injecting styles
+  if (document.head) injectUserstylesAndThemes({ addonsWithUserstyles, themes, isUpdate: false });
+  else {
+    const observer = new MutationObserver(() => {
+      if (document.head) {
+        injectUserstylesAndThemes({ addonsWithUserstyles, themes, isUpdate: false });
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.documentElement, { subtree: true, childList: true });
+  }
 
-  const template = document.createElement("template");
-  template.id = "scratch-addons";
-  template.setAttribute("data-path", chrome.runtime.getURL(""));
-  template.setAttribute("data-userscripts", JSON.stringify(addonsWithUserscripts));
-  template.setAttribute("data-global-state", JSON.stringify(globalState));
-  template.setAttribute("data-l10njson", JSON.stringify(l10njson));
-  document.head.appendChild(template);
+  if (!_page_) {
+    await new Promise((resolve) => {
+      // We're registering this load event after the load event that
+      // sets _page_, so we can guarantee _page_ exists now
+      moduleScript.addEventListener("load", resolve);
+    });
+  }
 
-  const script = document.createElement("script");
-  script.type = "module";
-  script.src = chrome.runtime.getURL("content-scripts/inject/module.js");
-  document.head.appendChild(script);
+  _page_.globalState = globalState;
+  _page_.l10njson = l10njson;
+  _page_.addonsWithUserscripts = addonsWithUserscripts;
+  _page_.dataReady = true;
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.newGlobalState) {
-      template.setAttribute("data-global-state", JSON.stringify(request.newGlobalState));
+      _page_.globalState = request.newGlobalState;
       setCssVariables(request.newGlobalState.addonSettings);
     } else if (request.fireEvent) {
-      const eventDetails = JSON.stringify(request.fireEvent);
-      template.setAttribute(`data-fire-event__${Date.now()}`, eventDetails);
-    } else if (typeof request.setMsgCount !== "undefined") {
-      template.setAttribute("data-msgcount", request.setMsgCount);
+      _page_.fireEvent(request.fireEvent);
+    } else if (request.setMsgCount) {
+      _page_.setMsgCount(request.setMsgCount);
     } else if (request === "getRunningAddons") {
-      // We need to send themes that might have been injected dynamically
-      sendResponse([
-        ...new Set([
-          ...addonsWithUserscripts.map((obj) => obj.addonId),
-          ...Array.from(document.querySelectorAll(".scratch-addons-theme")).map((style) =>
-            style.getAttribute("data-addon-id")
-          ),
-        ]),
-      ]);
+      const userscripts = addonsWithUserscripts.map((obj) => obj.addonId);
+      const userstyles = addonsWithUserstyles.map((obj) => obj.addonId);
+      const activeThemes = Array.from(document.querySelectorAll(".scratch-addons-theme")).map((style) =>
+        style.getAttribute("data-addon-id")
+      );
+      const inactiveThemes = [...sessionEnabledThemes].filter((addonId) => !activeThemes.includes(addonId));
+      sendResponse({
+        userscripts,
+        userstyles,
+        activeThemes,
+        inactiveThemes,
+      });
     }
   });
-
-  const observer = new MutationObserver((mutationsList) => {
-    for (const mutation of mutationsList) {
-      const attr = mutation.attributeName;
-      const attrType = attr.substring(0, attr.indexOf("__"));
-      const attrRawVal = template.getAttribute(attr);
-      let attrVal;
-      try {
-        attrVal = JSON.parse(attrRawVal);
-      } catch (err) {
-        attrVal = attrRawVal;
-      }
-      if (attrVal === null) return;
-      console.log("[Attribute update]", attr + ":", attrVal);
-      const removeAttr = () => template.removeAttribute(attr);
-      if (attrType === "data-request-msgcount") {
-        chrome.runtime.sendMessage("getMsgCount");
-        removeAttr();
-      }
-      if (attr === "data-clipboard-image" && typeof browser !== "undefined") {
-        const dataURL = attrVal;
-        removeAttr();
-        browser.runtime.sendMessage({ clipboardDataURL: dataURL }).then(
-          (res) => {
-            template.setAttribute("data-clipboard", "success");
-          },
-          (res) => {
-            console.error("Error inside clipboard: ", res);
-            template.setAttribute("data-clipboard", res.toString());
-          }
-        );
-      }
-    }
-  });
-  observer.observe(template, { attributes: true });
 }
 
 const escapeHTML = (str) => str.replace(/([<>'"&])/g, (_, l) => `&#${l.charCodeAt(0)};`);
@@ -213,7 +249,7 @@ const showBanner = () => {
     position: fixed;
     bottom: 20px;
     right: 20px;
-    width: 600px;
+    width: 700px;
     max-height: 270px;
     display: flex;
     align-items: center;
@@ -229,8 +265,8 @@ const showBanner = () => {
   });
   const notifImage = Object.assign(document.createElement("img"), {
     alt: chrome.i18n.getMessage("hexColorPickerAlt"),
-    src: chrome.runtime.getURL("/images/cs/auto-hide-palette.gif"),
-    style: "height: 150px; border-radius: 5px",
+    src: chrome.runtime.getURL("/images/cs/draganddrop.gif"),
+    style: "height: 175px; border-radius: 5px",
   });
   const notifText = Object.assign(document.createElement("div"), {
     id: "sa-notification-text",
@@ -282,7 +318,14 @@ const showBanner = () => {
   });
   const notifInnerText2 = Object.assign(document.createElement("span"), {
     style: NOTIF_TEXT_STYLE,
-    textContent: chrome.i18n.getMessage("extensionUpdateInfo2"),
+    innerHTML: escapeHTML(chrome.i18n.getMessage("extensionUpdateInfo2", DOLLARS)).replace(
+      "$1",
+      Object.assign(document.createElement("a"), {
+        href: "https://scratchaddons.com/translate",
+        target: "_blank",
+        textContent: chrome.i18n.getMessage("helpTranslateScratchAddons"),
+      }).outerHTML
+    ),
   });
   const notifFooter = Object.assign(document.createElement("span"), {
     style: NOTIF_TEXT_STYLE,
@@ -335,7 +378,7 @@ const showBanner = () => {
 
 const handleBanner = async () => {
   const currentVersion = chrome.runtime.getManifest().version;
-  const [major, minor, patch] = currentVersion.split(".");
+  const [major, minor, _] = currentVersion.split(".");
   const currentVersionMajorMinor = `${major}.${minor}`;
   // Making this configurable in the future?
   // Using local because browser extensions may not be updated at the same time across browsers

@@ -5,9 +5,13 @@
     <title></title>
     <script src="../../webpages/set-lang.js" defer></script>
     <link rel="stylesheet" href="popup.css" />
-    <link href="../../libraries/Sora.css" rel="stylesheet" />
     <script src="../../libraries/vue.js" defer></script>
+    <link rel="preload" href="light.css" as="style" />
     <script src="./popup.js" type="module"></script>
+    <style>
+      @import url("../../webpages/styles/components/tooltips.css");
+      @import url("../../webpages/styles/components/popup.css");
+    </style>
     <base target="_blank" />
 
     <!-- <comment> element template -->
@@ -16,7 +20,8 @@
         class="comment"
         :class="{'child-comment': !isParent, 'unread': unread, 'comment-me' : thisComment.author === username}"
       >
-        <a class="comment-author" @click="openProfile(thisComment.author)">{{ thisComment.author }}</a>
+        <a class="comment-author" @click="openProfile(thisComment.author)">{{ thisComment.author }}</a>{{
+        thisComment.scratchTeam ? "*" : "" }}
         <span class="comment-time" v-show="deleteStep !== 1 && !deleted">
           · {{ commentTimeAgo }}&nbsp;&nbsp;
           <img
@@ -113,7 +118,7 @@
           </div>
           <span class="message-type-title-text">{{ uiMessages.studioPromotionsMsg }}</span>
           <span class="float-right"
-            ><img class="small-icon" src="../../images/icons/admin-users.svg" /> {{ studioPromotions.length }}</span
+            ><img class="small-icon" src="../../images/icons/adminusers.svg" /> {{ studioPromotions.length }}</span
           >
         </div>
         <div class="message-type-details" v-show="messageTypeExtended.studioPromotions">

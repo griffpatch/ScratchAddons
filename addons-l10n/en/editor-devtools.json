@@ -39,8 +39,8 @@
   "editor-devtools/tutorials": "Tutorials",
   "editor-devtools/enter-expr": "Griffpatch: Enter an expression (i.e. a+2*3)",
   "editor-devtools/replace": "Griffpatch: Switch all {name} in this sprite for the variable named:",
-  "editor-devtools/top": "Send to top",
-  "editor-devtools/bottom": "Send to bottom",
+  "editor-devtools/top": "send to top",
+  "editor-devtools/bottom": "send to bottom",
   "editor-devtools/clean-plus": "Clean Up Blocks (+)",
   "editor-devtools/paste": "Paste",
   "editor-devtools/copy-all": "Copy All",
@@ -51,9 +51,5 @@
   "editor-devtools/variables": "variables",
   "editor-devtools/insert": "Insert",
   "editor-devtools/start-typing": "Start Typing...",
-  "editor-devtools/show-senders": "Show senders",
-  "editor-devtools/show-receivers": "Show receivers",
-  "editor-devtools/show-broadcast": "Show Broadcast Senders/Receivers",
-  "editor-devtools/show-broadcast-desc": "Right-click a broadcast block, then click \"Show senders\" or \"Show receivers\". Sprites with the block will get highlighted.",
   "editor-devtools/extension-description-not-for-addon": "Scratch 3 Developer Tools to enhance your Scratch Editing Experience on https://scratch.mit.edu"
 }

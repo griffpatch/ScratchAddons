@@ -5,7 +5,6 @@ import dataURLToBlob from "../../libraries/data-url-to-blob.js";
 import getWorkerScript from "./worker.js";
 
 const DATA_PNG = "data:image/png;base64,";
-const template = document.getElementById("scratch-addons");
 
 /**
  * APIs specific to userscripts.
@@ -55,22 +54,10 @@ export default class Tab extends Listenable {
       if (markAsSeen) this._waitForElementSet.add(element);
       return Promise.resolve(element);
     }
-    return new Promise((resolve) =>
-      new MutationObserver((mutationsList, observer) => {
-        const elements = document.querySelectorAll(selector);
-        for (const element of elements) {
-          if (this._waitForElementSet.has(element)) continue;
-          observer.disconnect();
-          resolve(element);
-          if (markAsSeen) this._waitForElementSet.add(element);
-          break;
-        }
-      }).observe(document.documentElement, {
-        attributes: false,
-        childList: true,
-        subtree: true,
-      })
-    );
+    return scratchAddons.sharedObserver.watch({
+      query: selector,
+      seen: markAsSeen ? this._waitForElementSet : null,
+    });
   }
   /**
    * editor mode (or null for non-editors).
@@ -104,12 +91,8 @@ export default class Tab extends Listenable {
       return navigator.clipboard.write(items);
     } else {
       // Firefox needs Content Script
-      template.setAttribute("data-clipboard-image", dataURL);
-      return this.waitForElement("[data-clipboard]").then((el) => {
-        const attr = el.dataset.clipboard;
-        el.removeAttribute("data-clipboard");
-        if (attr === "success") return Promise.resolve();
-        return Promise.reject(new Error(`Error inside clipboard handler: ${attr}`));
+      return scratchAddons.methods.copyImage(dataURL).catch((err) => {
+        return Promise.reject(new Error(`Error inside clipboard handler: ${err}`));
       });
     }
   }
@@ -121,7 +104,17 @@ export default class Tab extends Listenable {
    */
   scratchMessage(key) {
     if (this.clientVersion === "scratch-www") {
-      return window._messages[window._locale][key] || key;
+      const locales = [window._locale ? window._locale.toLowerCase() : "en"];
+      if (locales[0].includes("-")) locales.push(locales[0].split("-")[0]);
+      if (locales.includes("pt") && !locales.includes("pt-br")) locales.push("pt-br");
+      if (!locales.includes("en")) locales.push("en");
+      for (const locale of locales) {
+        if (window._messages[locale] && window._messages[locale][key]) {
+          return window._messages[locale][key];
+        }
+      }
+      console.warn("Unknown key: ", key);
+      return "";
     }
     if (this.clientVersion === "scratchr2") {
       return window.django.gettext(key);

@@ -1,4 +1,7 @@
 /* Comments */
+.box .box-content .template-feature-off {
+  color: #fff;
+}
 #comments form .small-text {
   color: #fff;
 }
@@ -23,6 +26,9 @@
 }
 #comments .comment .info .name a {
   color: #fff;
+}
+#comments .comment .info .time {
+  color: rgba(255, 255, 255, 0.4);
 }
 #comments #comments-loading {
   background-color: transparent;

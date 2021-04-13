@@ -19,6 +19,8 @@
     "md5": "readonly",
     "scratchblocks": "readonly",
     "tinycolor": "readonly",
+    "Chart": "readonly",
+    "Comlink": "readonly",
 
     // Scratch-defined
     "Scratch": "readonly",

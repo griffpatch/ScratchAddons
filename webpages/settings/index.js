@@ -1,5 +1,85 @@
 import downloadBlob from "../../libraries/download-blob.js";
-const NEW_ADDONS = ["hide-flyout", "mediarecorder"];
+const NEW_ADDONS = ["drag-drop", "custom-block-shape"];
+
+Vue.directive("click-outside", {
+  priority: 700,
+  bind() {
+    let self = this;
+    this.event = function (event) {
+      self.vm.$emit(self.expression, event);
+    };
+    this.el.addEventListener("mousedown", this.stopProp);
+    document.body.addEventListener("mousedown", this.event);
+  },
+
+  unbind() {
+    this.el.removeEventListener("mousedown", this.stopProp);
+    document.body.removeEventListener("mousedown", this.event);
+  },
+  stopProp(event) {
+    event.stopPropagation();
+  },
+});
+
+const ColorInput = Vue.extend({
+  props: ["value", "addon", "setting", "no_alpha"],
+  template: document.querySelector("template#picker-component").innerHTML,
+  data() {
+    return {
+      isOpen: false,
+      color: this.value,
+      canCloseOutside: false,
+      formats: "",
+      opening: false,
+    };
+  },
+  ready() {
+    if (this.no_alpha) {
+      this.formats = "hex,rgb,hsv,hsl";
+    } else {
+      this.formats = "hex,hex8,rgb,hsv,hsl";
+    }
+    this.$els.pickr.addEventListener("input", (e) => {
+      this.color = "#" + e.detail.value;
+      if (this.value !== this.color) {
+        this.$parent.addonSettings[this.addon._addonId][this.setting.id] = "#" + this.$els.pickr.hex8;
+        this.$parent.updateSettings(this.addon, { wait: 250, settingId: this.setting.id });
+      }
+    });
+  },
+  methods: {
+    toggle(addon, setting, value = !this.isOpen) {
+      this.isOpen = value;
+      this.opening = true;
+      for (let child of this.$root.$children) {
+        if (child.isOpen && child.canCloseOutside && child.color && !child.opening) {
+          child.toggle(child.addon, child.setting, false);
+        }
+      }
+      this.opening = false;
+
+      this.color = "#" + this.$els.pickr.hex8;
+      if (this.value !== this.color) {
+        this.$parent.addonSettings[addon._addonId][setting.id] = "#" + this.$els.pickr.hex8;
+        this.$parent.updateSettings(addon, { wait: 250, settingId: setting.id });
+      }
+      this.canCloseOutside = false;
+      setTimeout(() => {
+        this.canCloseOutside = true;
+      }, 0);
+    },
+  },
+  watch: {
+    value() {
+      this.color = this.value;
+      this.$els.pickr._valueChanged();
+    },
+    isOpen() {
+      this.$els.pickr._valueChanged();
+    },
+  },
+});
+Vue.component("picker", ColorInput);
 
 const browserLevelPermissions = ["notifications", "clipboardWrite"];
 let grantedOptionalPermissions = [];
@@ -104,33 +184,11 @@ const deserializeSettings = async (str, manifests, confirmElem) => {
   return resolveOnConfirmPromise;
 };
 
-Vue.directive("click-outside", {
-  priority: 700,
-  bind() {
-    let self = this;
-    this.event = function (event) {
-      console.log("emitting event");
-      self.vm.$emit(self.expression, event);
-    };
-    this.el.addEventListener("click", this.stopProp);
-    document.body.addEventListener("click", this.event);
-  },
-
-  unbind() {
-    console.log("unbind");
-    this.el.removeEventListener("click", this.stopProp);
-    document.body.removeEventListener("click", this.event);
-  },
-  stopProp(event) {
-    event.stopPropagation();
-  },
-});
-
 const vue = (window.vue = new Vue({
   el: "body",
   data: {
     smallMode: false,
-    theme: "",
+    theme: false,
     themePath: "",
     switchPath: "../../images/icons/switch.svg",
     isOpen: false,
@@ -142,7 +200,7 @@ const vue = (window.vue = new Vue({
     selectedTag: null,
     searchInput: "",
     addonSettings: {},
-    popupOpenedOnScratchTab: false,
+    addonsRunningOnTab: false,
     addonToEnable: null,
     showPopupModal: false,
     isIframe: window.parent !== window,
@@ -222,6 +280,7 @@ const vue = (window.vue = new Vue({
       return chrome.runtime.getManifest().version_name;
     },
   },
+
   methods: {
     closesidebar: function () {
       if (this.categoryOpen && this.smallMode) {
@@ -289,10 +348,13 @@ const vue = (window.vue = new Vue({
       });
     },
     addonMatchesFilters(addonManifest) {
+      if (!addonManifest._wasEverEnabled) addonManifest._wasEverEnabled = addonManifest._enabled;
+
       const matchesTag = this.selectedTag === null || addonManifest.tags.includes(this.selectedTag);
       const matchesSearch =
         this.searchInput === "" ||
         addonManifest.name.toLowerCase().includes(this.searchInput.toLowerCase()) ||
+        addonManifest._addonId.toLowerCase().includes(this.searchInput.toLowerCase()) ||
         addonManifest.description.toLowerCase().includes(this.searchInput.toLowerCase()) ||
         (addonManifest.credits &&
           addonManifest.credits
@@ -300,14 +362,33 @@ const vue = (window.vue = new Vue({
             .some((author) => author.includes(this.searchInput.toLowerCase())));
       // Show disabled easter egg addons only if category is easterEgg
       const matchesEasterEgg = addonManifest.tags.includes("easterEgg")
-        ? this.selectedTab === "easterEgg" || addonManifest._enabled
+        ? this.selectedTab === "easterEgg" || addonManifest._wasEverEnabled
         : true;
+
+      // April fools
+      if (!this._dangoForceWasEverTrue) this._dangoForceWasEverTrue = this.addonSettings["dango-rain"].force;
+      if (addonManifest._addonId === "dango-rain") {
+        const now = new Date().getTime() / 1000;
+        if (this.selectedTab === "easterEgg") {
+          // Work normally
+          return matchesTag && matchesSearch && matchesEasterEgg;
+        } else if (now < 1617364800 && now > 1617192000) {
+          // If it's April Fools Day, show even if disabled
+          return matchesTag && matchesSearch;
+        } else if (addonManifest._wasEverEnabled && this._dangoForceWasEverTrue) {
+          // If it's not April Fools Day but dangos are forced, show.
+          // Using this._dangoForceWasEverTrue to avoid addon poofing
+          // if setting was enabled on load and it's then disabled
+          return matchesTag && matchesSearch;
+        } else return false;
+      }
+
       return matchesTag && matchesSearch && matchesEasterEgg;
     },
     stopPropagation(e) {
       e.stopPropagation();
     },
-    toggleAddonRequest(addon) {
+    toggleAddonRequest(addon, event) {
       const toggle = () => {
         // Prevents selecting text when the shift key is being help down
         event.preventDefault();
@@ -365,7 +446,7 @@ const vue = (window.vue = new Vue({
     updateSettings(addon, { wait = 0, settingId = null } = {}) {
       const value = settingId && this.addonSettings[addon._addonId][settingId];
       setTimeout(() => {
-        if (!settingId || (settingId && this.addonSettings[addon._addonId][settingId] === value)) {
+        if (!settingId || this.addonSettings[addon._addonId][settingId] === value) {
           chrome.runtime.sendMessage({
             changeAddonSettings: { addonId: addon._addonId, newSettings: this.addonSettings[addon._addonId] },
           });
@@ -459,31 +540,56 @@ const vue = (window.vue = new Vue({
           chrome.tabs.sendMessage(tabs[0].id, "getRunningAddons", { frameId: 0 }, (res) => {
             // Just so we don't get any errors in the console if we don't get any response from a non scratch tab.
             chrome.runtime.lastError;
-            if (res && res.length) {
-              this.popupOpenedOnScratchTab = true;
-              this.manifests.sort((a, b) =>
-                res.includes(a._addonId) && res.includes(b._addonId)
-                  ? a.name.localeCompare(b.name)
-                  : res.includes(a._addonId)
-                  ? -1
-                  : res.includes(b._addonId)
-                  ? 1
-                  : 0
+
+            const addonsCurrentlyOnTab = !res
+              ? []
+              : [...new Set([...res.userscripts, ...res.activeThemes, ...res.userstyles])].filter((runningAddonId) => {
+                  // Consider addons with "dynamicUserscriptDisable": true
+                  // If those are running on the page, their "is running on this tab"
+                  // status should be the same as their "is enabled" status
+                  const manifest = this.manifests.find((manifest) => manifest._addonId === runningAddonId);
+                  if (manifest.dynamicDisable && !manifest._enabled) return false;
+                  return true;
+                });
+            // Addons/themes that were previously enabled on the tab (but not anymore)
+            // should go above enabled addons that are not currently running on the tab
+            // so that it's easier to find them, even if the popup was closed.
+            // Disabling then reenabling an addon is likely something common
+            // so hopefully this saves some seconds of our users' lives :P
+            const addonsPreviouslyOnTab = !res
+              ? []
+              : [...new Set([...res.userscripts, ...res.activeThemes, ...res.inactiveThemes])].filter(
+                  (runningAddonId) => !addonsCurrentlyOnTab.includes(runningAddonId)
+                );
+
+            this.addonsRunningOnTab = Boolean(addonsCurrentlyOnTab.length);
+
+            this.manifests.sort((a, b) =>
+              addonsCurrentlyOnTab.includes(a._addonId) && addonsCurrentlyOnTab.includes(b._addonId)
+                ? a.name.localeCompare(b.name)
+                : addonsCurrentlyOnTab.includes(a._addonId)
+                ? -1
+                : addonsCurrentlyOnTab.includes(b._addonId)
+                ? 1
+                : addonsPreviouslyOnTab.includes(a._addonId) && addonsPreviouslyOnTab.includes(b._addonId)
+                ? a.name.localeCompare(b.name)
+                : addonsPreviouslyOnTab.includes(a._addonId)
+                ? -1
+                : addonsPreviouslyOnTab.includes(b._addonId)
+                ? 1
+                : 0
+            );
+
+            const currentMarginBottomAddon = this.manifests.find((manifest) => manifest._marginBottom === true);
+            if (currentMarginBottomAddon) Vue.set(currentMarginBottomAddon, "_marginBottom", false);
+            if (addonsCurrentlyOnTab.length) {
+              // Find first addon not currently running on tab
+              const firstNonRunningAddonIndex = this.manifests.findIndex(
+                (manifest) => !addonsCurrentlyOnTab.includes(manifest._addonId)
               );
-              // Find last currently running addon to add bottom margin
-              const currentMarginBottomAddon = this.manifests.find((manifest) => manifest._marginBottom === true);
-              if (currentMarginBottomAddon) Vue.set(currentMarginBottomAddon, "_marginBottom", false);
-              let lastManifest;
-              for (const manifest of this.manifests) {
-                if (!res.includes(manifest._addonId)) {
-                  console.log(manifest);
-                  Vue.set(lastManifest, "_marginBottom", true);
-                  break;
-                }
-                lastManifest = manifest;
-              }
-              resolve();
-            } else resolve();
+              Vue.set(this.manifests[firstNonRunningAddonIndex - 1], "_marginBottom", true);
+            }
+            resolve();
           });
         });
       });
@@ -514,7 +620,15 @@ const vue = (window.vue = new Vue({
         this.isOpen = false;
       }
     },
+    closePickers(e) {
+      for (let child of this.$children) {
+        if (child.isOpen && child.canCloseOutside && e.isTrusted && child.color) {
+          child.toggle(child.addon, child.setting, false);
+        }
+      }
+    },
   },
+
   watch: {
     selectedTab() {
       this.selectedTag = null;
