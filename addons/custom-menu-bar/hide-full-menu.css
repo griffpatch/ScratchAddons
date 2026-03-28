@@ -1,0 +1,9 @@
+#app > div.gui {
+  > [class^="gui_menu-bar-position_"] {
+    display: none;
+  }
+
+  > [class^="gui_body-wrapper_"] {
+    height: 100%;
+  }
+}

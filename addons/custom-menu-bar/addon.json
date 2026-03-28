@@ -17,6 +17,12 @@
       "link": "https://scratch.mit.edu/users/lisa_wolfgang/",
       "note": "hide tutorials button",
       "id": "tutorials-button"
+    },
+    {
+      "name": "griffpatch",
+      "link": "https://scratch.mit.edu/users/griffpatch/",
+      "note": "hide full menu bar",
+      "id": "full-menu-bar"
     }
   ],
   "info": [
@@ -70,6 +76,12 @@
     {
       "name": "Compact user dropdown",
       "id": "compact-username",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "Hide full menu bar",
+      "id": "hide-full-menu-bar",
       "type": "boolean",
       "default": false
     }
@@ -142,6 +154,15 @@
         "settings": {
           "hide-tutorials-button": true,
           "hide-debug-button": true
+        }
+      }
+    },
+    {
+      "url": "hide-full-menu.css",
+      "matches": ["projects"],
+      "if": {
+        "settings": {
+          "hide-full-menu-bar": true
         }
       }
     }
