@@ -1,0 +1,37 @@
+/* Secondary toolbar: floats above the canvas while rig mode is active */
+.sa-rig-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 4px;
+  padding: 4px 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  pointer-events: all;
+}
+
+.sa-rig-toolbar button {
+  padding: 3px 10px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  cursor: pointer;
+  background: white;
+  font-size: 11px;
+  font-family: inherit;
+  color: #575e75;
+  transition: background 0.1s;
+}
+
+.sa-rig-toolbar button:hover {
+  background: #f0f0f0;
+}
+
+.sa-rig-toolbar button.sa-rig-active {
+  background: #4c97ff;
+  color: white;
+  border-color: #4c97ff;
+}

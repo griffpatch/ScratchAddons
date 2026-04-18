@@ -1,0 +1,28 @@
+{
+  "name": "Rig tool for paint editor",
+  "description": "Add a rigging tool to the vector paint editor. Group shapes into limbs, define pivot joints on each group, then use Move mode to rotate limbs around their joints. Pivot markers are stored invisibly in the SVG and survive save/load cycles.",
+  "credits": [
+    {
+      "name": "griffpatch",
+      "link": "https://scratch.mit.edu/users/griffpatch/"
+    }
+  ],
+  "tags": ["editor", "costumeEditor"],
+  "versionAdded": "1.45.0",
+  "dynamicEnable": true,
+  "dynamicDisable": true,
+  "userscripts": [
+    {
+      "url": "userscript.js",
+      "matches": ["projects"]
+    }
+  ],
+  "userstyles": [
+    {
+      "url": "style.css",
+      "matches": ["projects"]
+    }
+  ],
+  "libraries": ["scratch-paint"],
+  "enabledByDefault": false
+}
