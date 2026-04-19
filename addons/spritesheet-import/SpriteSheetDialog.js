@@ -34,6 +34,7 @@ export default class SpriteSheetDialog {
     this._anchorIndex = _lastAnchorIndex;
     this._zoom = 1;
     this._midDrag = null;
+    this._costumeNames = [];
   }
 
   /**
@@ -43,8 +44,13 @@ export default class SpriteSheetDialog {
    * @returns {Promise<ImportSpec | null>}
    *   Resolves with { tiles, cols, rows, baseName, anchorIndex, replaceExisting } or null on cancel.
    */
-  open(file) {
+  /**
+   * @param {string[]} [costumeNames] - Names of costumes already on the target sprite,
+   *   used to highlight tiles that have already been imported.
+   */
+  open(file, costumeNames = []) {
     this._anchorIndex = _lastAnchorIndex;
+    this._costumeNames = costumeNames;
     return new Promise((resolve) => {
       this._resolve = resolve;
       this._buildDOM(file);
@@ -286,6 +292,7 @@ export default class SpriteSheetDialog {
     this._clearAllBtn.addEventListener("click", () => this._tileGrid?.clearAll());
     this._tileWInput.addEventListener("change", () => this._onGridInputChange());
     this._tileHInput.addEventListener("change", () => this._onGridInputChange());
+    this._nameInput.addEventListener("input", () => this._updateImported());
     this._zoomInBtn.addEventListener("click", () => this._zoomIn());
     this._zoomOutBtn.addEventListener("click", () => this._zoomOut());
     this._zoomResetBtn.addEventListener("click", () => this._setZoom(1));
@@ -312,8 +319,6 @@ export default class SpriteSheetDialog {
       URL.revokeObjectURL(url);
       this._img = this._previewImg;
       this._analyzer = new SpriteSheetAnalyzer(this._img);
-      this._overlayCanvas.width = this._analyzer.imageWidth;
-      this._overlayCanvas.height = this._analyzer.imageHeight;
       // Pick ×2 if the image fits in the available preview area, else ×1.
       // We defer one frame so the preview wrap has been laid out and its
       // clientWidth/clientHeight reflect the actual available space.
@@ -386,20 +391,51 @@ export default class SpriteSheetDialog {
       }
     }
 
+    const imported = this._computeImported(cols, rows);
+
     if (this._tileGrid) {
-      this._tileGrid.setGrid(cols, rows, selected, blank);
+      this._tileGrid.setGrid(cols, rows, selected, blank, imported);
     } else {
       this._tileGrid = new SpriteSheetTileGrid(
         this._overlayCanvas,
         cols,
         rows,
         selected,
-        blank
+        blank,
+        imported
       );
       this._tileGrid.onSelectionChange = () => this._updateImportButton();
     }
 
     this._updateImportButton();
+  }
+
+  // ─── Already-imported highlighting ──────────────────────────────────────────
+
+  /**
+   * Return the set of tile keys ("col:row") that already have a costume on the
+   * sprite with the current base name.
+   *
+   * @param {number} cols
+   * @param {number} rows
+   * @returns {Set<string>}
+   */
+  _computeImported(cols = this._cols, rows = this._rows) {
+    const baseName = this._nameInput?.value.trim() || "costume";
+    const nameSet = new Set(this._costumeNames);
+    const imported = new Set();
+    for (let r = 1; r <= rows; r++) {
+      for (let c = 1; c <= cols; c++) {
+        if (nameSet.has(`${baseName}:${c}:${r}`)) imported.add(`${c}:${r}`);
+      }
+    }
+    return imported;
+  }
+
+  /** Recompute the imported set after the base name changes and refresh the grid. */
+  _updateImported() {
+    if (!this._tileGrid) return;
+    this._tileGrid.setImported(this._computeImported());
   }
 
   // ─── Anchor ─────────────────────────────────────────────────────────────────
@@ -434,15 +470,19 @@ export default class SpriteSheetDialog {
   _setZoom(factor) {
     this._zoom = factor;
     if (!this._analyzer) return;
-    const w = this._analyzer.imageWidth * factor;
-    const h = this._analyzer.imageHeight * factor;
+    const w = Math.round(this._analyzer.imageWidth * factor);
+    const h = Math.round(this._analyzer.imageHeight * factor);
+    // Resize the canvas buffer to the display size so 1 buffer pixel = 1 CSS pixel.
+    // Grid lines stay exactly 1px and tile labels stay crisp at every zoom level.
+    // The canvas CSS size is governed by `inset: 0` + the previewInner container.
+    this._overlayCanvas.width = w;
+    this._overlayCanvas.height = h;
     this._previewImg.style.width = `${w}px`;
     this._previewImg.style.height = `${h}px`;
-    this._overlayCanvas.style.width = `${w}px`;
-    this._overlayCanvas.style.height = `${h}px`;
     this._previewInner.style.width = `${w}px`;
     this._previewInner.style.height = `${h}px`;
     this._zoomLabel.textContent = `${Math.round(factor * 100)}%`;
+    this._tileGrid?.render();
   }
 
   _zoomIn() {
