@@ -295,6 +295,8 @@ export default class SpriteSheetDialog {
     this._previewWrap.addEventListener("mousemove", (e) => this._onWrapMouseMove(e));
     this._previewWrap.addEventListener("mouseup", (e) => this._onWrapMouseUp(e));
     this._previewWrap.addEventListener("mouseleave", () => this._onWrapMouseLeave());
+    // Wheel-to-zoom (intercept before the browser can scroll the wrap).
+    this._previewWrap.addEventListener("wheel", (e) => this._onWrapWheel(e), { passive: false });
 
     // Load image and initialize
     this._loadImage(file);
@@ -312,8 +314,18 @@ export default class SpriteSheetDialog {
       this._analyzer = new SpriteSheetAnalyzer(this._img);
       this._overlayCanvas.width = this._analyzer.imageWidth;
       this._overlayCanvas.height = this._analyzer.imageHeight;
-      this._setZoom(1);
-      this._runAutoDetect();
+      // Pick ×2 if the image fits in the available preview area, else ×1.
+      // We defer one frame so the preview wrap has been laid out and its
+      // clientWidth/clientHeight reflect the actual available space.
+      requestAnimationFrame(() => {
+        const w = this._previewWrap.clientWidth;
+        const h = this._previewWrap.clientHeight;
+        const naturalW = this._analyzer.imageWidth;
+        const naturalH = this._analyzer.imageHeight;
+        const zoom = naturalW * 2 <= w && naturalH * 2 <= h ? 2 : 1;
+        this._setZoom(zoom);
+        this._runAutoDetect();
+      });
     };
     this._previewImg.src = url;
   }
@@ -441,6 +453,12 @@ export default class SpriteSheetDialog {
   _zoomOut() {
     const i = [...ZOOM_STEPS].reverse().findIndex((s) => s < this._zoom);
     if (i !== -1) this._setZoom(ZOOM_STEPS[ZOOM_STEPS.length - 1 - i]);
+  }
+
+  _onWrapWheel(e) {
+    e.preventDefault();
+    if (e.deltaY < 0) this._zoomIn();
+    else this._zoomOut();
   }
 
   // ─── Middle-button pan ────────────────────────────────────────────────────────
