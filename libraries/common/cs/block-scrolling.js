@@ -38,7 +38,10 @@ function getFindBarDropdownWidth() {
  */
 export function initializeSmoothScrolling(blockly) {
   _blocklyInstance = blockly;
-  _smoothScrollAnimator = createSmoothScrollAnimator(blockly);
+  // New Blockly (registry-based) has different scrollbar internals - use instant scroll only
+  if (!blockly.registry) {
+    _smoothScrollAnimator = createSmoothScrollAnimator(blockly);
+  }
 }
 
 /**
