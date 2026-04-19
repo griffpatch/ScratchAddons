@@ -1,3 +1,8 @@
+﻿/**
+ * @typedef {import('blockly').Block} Blockly.Block
+ * @typedef {import('blockly').Workspace} Blockly.Workspace
+ */
+
 /**
  * Find all the uses of a named variable.
  * @param {string} id ID of the variable to find.
@@ -26,13 +31,14 @@ export const getVariableUsesById = (id, workspace) => {
 
 /**
  * A nicely ordered version of the top blocks
- * @returns {[Blockly.Block]}
+ * @param {Blockly.Workspace} workspace - The Blockly workspace
+ * @returns {Array<Blockly.Block>} Array of top-level blocks in order
  */
 export const getTopBlocks = (workspace) => {
   let result = getOrderedTopBlockColumns(false, workspace);
   let columns = result.cols;
   /**
-   * @type {[[Blockly.Block]]}
+   * @type {Array<Blockly.Block>}
    */
   let topBlocks = [];
   for (const col of columns) {
@@ -150,3 +156,22 @@ class Col {
     this.blocks = blocks;
   }
 }
+
+/**
+ * Find the top block of a stack (the block that would be at the top if stacked vertically).
+ * For reporter blocks embedded in other blocks, this walks up to find the containing stack.
+ * 
+ * @param {Blockly.Block} block - A block in a stack
+ * @returns {Blockly.Block} The topmost block of the stack
+ */
+export const getTopOfStackFor = (block) => {
+  let base = block;
+  // Walk up through parent blocks as long as this block has an output shape
+  // and is surrounded by another block
+  while (base.getOutputShape && base.getOutputShape() && base.getSurroundParent) {
+    const parent = base.getSurroundParent();
+    if (!parent) break;
+    base = parent;
+  }
+  return base;
+};
