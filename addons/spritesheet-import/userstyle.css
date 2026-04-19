@@ -1,0 +1,230 @@
+/* ─── Modal backdrop ─────────────────────────────────────────────────────── */
+
+.sa-ss-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+/* ─── Dialog container ───────────────────────────────────────────────────── */
+
+.sa-ss-dialog {
+  background: var(--ui-modal-background, #fff);
+  color: var(--text-primary, #1e1e2e);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 92vh;
+  max-width: 90vw;
+  overflow: auto;
+  padding: 20px 24px 16px;
+  width: 680px;
+}
+
+.sa-ss-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+/* ─── Image preview + canvas overlay ─────────────────────────────────────── */
+
+.sa-ss-preview-wrap {
+  background: repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 0 0 / 16px 16px;
+  border: 1px solid var(--ui-border, #ddd);
+  border-radius: 4px;
+  max-height: 420px;
+  overflow: hidden;
+  position: relative;
+  text-align: center;
+}
+
+.sa-ss-preview-img {
+  display: block;
+  max-height: 420px;
+  max-width: 100%;
+  /* The image is rendered inline; the canvas overlay is absolutely on top of it */
+}
+
+/*
+ * The canvas overlay is sized to the image's natural dimensions in the DOM,
+ * but CSS scales it to match the displayed image via inset:0 + object-fit:contain
+ * sizing. We use pointer-events on the canvas only.
+ */
+.sa-ss-overlay {
+  cursor: crosshair;
+  inset: 0;
+  /* display: block stretches the canvas to fill the wrapper; height/width are
+     the natural dimensions (set by JS). CSS max-height matches the preview. */
+  max-height: 420px;
+  max-width: 100%;
+  position: absolute;
+}
+
+/* ─── Controls rows ──────────────────────────────────────────────────────── */
+
+.sa-ss-grid-controls,
+.sa-ss-sel-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sa-ss-spinner-label {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+
+.sa-ss-spinner {
+  border: 1px solid var(--ui-border, #ccc);
+  border-radius: 4px;
+  padding: 3px 6px;
+  text-align: center;
+  width: 60px;
+}
+
+.sa-ss-detect-msg {
+  font-size: 0.8rem;
+  font-style: italic;
+  opacity: 0.75;
+}
+
+.sa-ss-detect-msg[data-confidence="high"] {
+  color: #1a8a1a;
+}
+.sa-ss-detect-msg[data-confidence="medium"] {
+  color: #b07800;
+}
+.sa-ss-detect-msg[data-confidence="low"] {
+  color: #c0392b;
+}
+
+/* ─── Name row ───────────────────────────────────────────────────────────── */
+
+.sa-ss-name-row {
+  display: flex;
+}
+
+.sa-ss-name-label {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.sa-ss-name-input {
+  border: 1px solid var(--ui-border, #ccc);
+  border-radius: 4px;
+  flex: 1;
+  padding: 4px 8px;
+}
+
+/* ─── Anchor picker ──────────────────────────────────────────────────────── */
+
+.sa-ss-anchor-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.sa-ss-anchor-label {
+  white-space: nowrap;
+}
+
+.sa-ss-anchor-grid {
+  display: grid;
+  gap: 4px;
+  grid-template-columns: repeat(3, 20px);
+  grid-template-rows: repeat(3, 20px);
+}
+
+.sa-ss-anchor-btn {
+  background: var(--ui-border, #ccc);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  height: 14px;
+  margin: auto;
+  padding: 0;
+  transition: background 0.15s, transform 0.1s;
+  width: 14px;
+}
+
+.sa-ss-anchor-btn:hover {
+  background: #4c9fec;
+  transform: scale(1.25);
+}
+
+.sa-ss-anchor-btn.sa-ss-anchor-selected {
+  background: #4c9fec;
+  box-shadow: 0 0 0 2px rgba(76, 159, 236, 0.45);
+  transform: scale(1.25);
+}
+
+/* ─── Footer ─────────────────────────────────────────────────────────────── */
+
+.sa-ss-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+/* ─── Buttons ────────────────────────────────────────────────────────────── */
+
+.sa-ss-btn {
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  padding: 6px 14px;
+  transition: filter 0.1s;
+}
+
+.sa-ss-btn:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.sa-ss-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.sa-ss-btn-secondary {
+  background: var(--ui-secondary, #e0e0e0);
+  color: inherit;
+}
+
+.sa-ss-btn-primary {
+  background: #4c9fec;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ─── Scratch dark mode ──────────────────────────────────────────────────── */
+
+[theme="dark"] .sa-ss-dialog,
+.sa-ss-dialog[data-theme="dark"] {
+  background: #2a2a3a;
+  color: #e8e8f0;
+}
+
+[theme="dark"] .sa-ss-spinner,
+[theme="dark"] .sa-ss-name-input {
+  background: #1e1e2e;
+  border-color: #555;
+  color: #e8e8f0;
+}
+
+[theme="dark"] .sa-ss-btn-secondary {
+  background: #3a3a4a;
+  color: #e8e8f0;
+}
