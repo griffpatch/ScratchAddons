@@ -364,13 +364,15 @@ export default class SpriteSheetDialog {
       anchorIndex: this._anchorIndex,
     };
 
+    const resolve = this._resolve;
     this._close();
-    this._resolve(spec);
+    resolve(spec);
   }
 
   _cancel() {
+    const resolve = this._resolve;
     this._close();
-    this._resolve(null);
+    resolve(null);
   }
 
   _close() {

@@ -47,12 +47,13 @@ export default class SpriteSheetAnalyzer {
   }
 
   /**
-   * Compute the mean alpha value along all inter-tile boundary lines for the
-   * given grid dimensions. Lower mean alpha = more transparent gutters = better fit.
+   * Compute the mean alpha on boundary lines, only counting pixels that are
+   * adjacent to content (at least one perpendicular neighbor has alpha > 0).
+   * This prevents large transparent margins from falsely rewarding coarse grids.
    *
    * @param {number} cols
    * @param {number} rows
-   * @returns {number} mean boundary alpha in [0, 255]
+   * @returns {number} mean boundary alpha in [0, 255], or 255 if no content near any boundary
    */
   _boundaryAlpha(cols, rows) {
     const { _width: w, _height: h, _ctx: ctx } = this;
@@ -65,26 +66,63 @@ export default class SpriteSheetAnalyzer {
     // Sample vertical boundary lines (between columns).
     for (let c = 1; c < cols; c++) {
       const x = Math.round(c * tileW);
-      const col = ctx.getImageData(x, 0, 1, h).data;
-      for (let i = 3; i < col.length; i += 4) {
-        sum += col[i];
-        count++;
+      const xL = Math.max(0, x - 1);
+      const xR = Math.min(w - 1, x + 1);
+      const boundary = ctx.getImageData(x, 0, 1, h).data;
+      const left = ctx.getImageData(xL, 0, 1, h).data;
+      const right = ctx.getImageData(xR, 0, 1, h).data;
+      for (let i = 3; i < boundary.length; i += 4) {
+        if (left[i] > 0 || boundary[i] > 0 || right[i] > 0) {
+          sum += boundary[i];
+          count++;
+        }
       }
     }
 
     // Sample horizontal boundary lines (between rows).
     for (let r = 1; r < rows; r++) {
       const y = Math.round(r * tileH);
-      const row = ctx.getImageData(0, y, w, 1).data;
-      for (let i = 3; i < row.length; i += 4) {
-        sum += row[i];
-        count++;
+      const yA = Math.max(0, y - 1);
+      const yB = Math.min(h - 1, y + 1);
+      const boundary = ctx.getImageData(0, y, w, 1).data;
+      const above = ctx.getImageData(0, yA, w, 1).data;
+      const below = ctx.getImageData(0, yB, w, 1).data;
+      for (let i = 3; i < boundary.length; i += 4) {
+        if (above[i] > 0 || boundary[i] > 0 || below[i] > 0) {
+          sum += boundary[i];
+          count++;
+        }
       }
     }
 
-    // A single-tile grid has no boundaries; treat as worst case.
     if (count === 0) return 255;
     return sum / count;
+  }
+
+  /**
+   * Preference bonus for common tile sizes and square tiles.
+   * Subtracted from the alpha score so preferred grids rank higher.
+   *
+   * @param {number} tileW
+   * @param {number} tileH
+   * @returns {number}
+   */
+  static _preferenceBonus(tileW, tileH) {
+    const PERFECT = new Set([16, 32]);
+    const GOOD = new Set([8, 24, 48, 64]);
+    const tw = Math.round(tileW);
+    const th = Math.round(tileH);
+
+    let bonus = 0;
+    if (PERFECT.has(tw) && PERFECT.has(th)) bonus += 100;
+    else if (PERFECT.has(tw) || PERFECT.has(th)) bonus += 50;
+    else if (GOOD.has(tw) && GOOD.has(th)) bonus += 60;
+    else if (GOOD.has(tw) || GOOD.has(th)) bonus += 25;
+
+    // Square tiles are far more common than rectangular ones.
+    if (Math.abs(tileW - tileH) < 1) bonus += 50;
+
+    return bonus;
   }
 
   /**
@@ -96,25 +134,40 @@ export default class SpriteSheetAnalyzer {
     const colCandidates = SpriteSheetAnalyzer._divisors(this._width);
     const rowCandidates = SpriteSheetAnalyzer._divisors(this._height);
 
-    // Skip the trivial 1×1 case unless it is the only option.
     const candidates = [];
     for (const cols of colCandidates) {
       for (const rows of rowCandidates) {
         if (cols === 1 && rows === 1) continue;
-        const score = this._boundaryAlpha(cols, rows);
-        candidates.push({ cols, rows, score });
+        const tileW = this._width / cols;
+        const tileH = this._height / rows;
+        const alpha = this._boundaryAlpha(cols, rows);
+        const bonus = SpriteSheetAnalyzer._preferenceBonus(tileW, tileH);
+        // Lower combined score = better candidate.
+        const score = Math.max(0, alpha - bonus);
+        candidates.push({ cols, rows, score, alpha, bonus });
       }
     }
 
-    // Also include 1×1 as a last resort.
-    candidates.push({ cols: 1, rows: 1, score: 255 });
+    // 1×1 is always the last resort.
+    candidates.push({ cols: 1, rows: 1, score: 255, alpha: 255, bonus: 0 });
 
-    candidates.sort((a, b) => a.score - b.score);
+    candidates.sort((a, b) => {
+      if (a.score !== b.score) return a.score - b.score;
+      if (a.bonus !== b.bonus) return b.bonus - a.bonus;
+      // Among equals, prefer more tiles (finer grid).
+      return b.cols * b.rows - a.cols * a.rows;
+    });
 
-    // Tag confidence based on the score of the top candidate.
-    return candidates.map((c) => ({
-      ...c,
-      confidence: c.score < 10 ? "high" : c.score < 60 ? "medium" : "low",
+    return candidates.map((c, i) => ({
+      cols: c.cols,
+      rows: c.rows,
+      score: c.score,
+      // High confidence = transparent gutters found. Medium = strong size preference.
+      confidence:
+        c.alpha < 10 ? "high"
+        : c.alpha < 60 ? "medium"
+        : c.bonus >= 100 && i === 0 ? "medium"
+        : "low",
     }));
   }
 
