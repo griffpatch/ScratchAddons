@@ -1,9 +1,18 @@
 import BlockItem from "./blockly/BlockItem.js";
 import BlockInstance from "./blockly/BlockInstance.js";
 import Utils from "./blockly/Utils.js";
+import { getTopBlocks } from "../../libraries/common/cs/devtools-utils.js";
+import * as BlockTypes from "./blockTypes.js";
 
 export default async function ({ addon, msg, console }) {
   const Blockly = await addon.tab.traps.getBlockly();
+
+  // When "explore blocks" is enabled, disable jump-to-definition
+  Object.defineProperty(Blockly.Gesture.prototype, "exploreBlocks", {
+    get() {
+      return !addon.self.disabled;
+    },
+  });
 
   class FindBar {
     constructor() {
