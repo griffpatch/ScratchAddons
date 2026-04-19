@@ -203,12 +203,12 @@ export default class SpriteSheetAnalyzer {
   }
 
   /**
-   * Fast djb2-based hash over pixel bytes. Used to detect identity.
+   * Fast djb2-based hash over raw pixel bytes. Used to detect identical tile content.
    *
    * @param {ImageData} imageData
    * @returns {number}
    */
-  hashImageData(imageData) {
+  static hashImageData(imageData) {
     let h = 5381;
     const { data } = imageData;
     for (let i = 0; i < data.length; i++) {

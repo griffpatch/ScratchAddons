@@ -87,8 +87,8 @@ export default async function ({ addon, msg, console }) {
     if (!file) return;
 
     const dialog = new SpriteSheetDialog(addon, msg);
-    const costumeNames = Array.from(vm.editingTarget?.sprite.costumes_ ?? [], (c) => c.name);
-    const spec = await dialog.open(file, costumeNames);
+    const existingCostumes = Array.from(vm.editingTarget?.sprite.costumes_ ?? []);
+    const spec = await dialog.open(file, existingCostumes);
     if (!spec || spec.tiles.length === 0) return;
 
     if (!vm.runtime.getTargetById(targetId)) {

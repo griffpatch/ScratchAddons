@@ -34,7 +34,8 @@ export default class SpriteSheetDialog {
     this._anchorIndex = _lastAnchorIndex;
     this._zoom = 1;
     this._midDrag = null;
-    this._costumeNames = [];
+    /** @type {Set<number> | null} djb2 hashes of existing costume pixel data; null while decoding. */
+    this._costumeHashes = null;
   }
 
   /**
@@ -45,12 +46,17 @@ export default class SpriteSheetDialog {
    *   Resolves with { tiles, cols, rows, baseName, anchorIndex, replaceExisting } or null on cancel.
    */
   /**
-   * @param {string[]} [costumeNames] - Names of costumes already on the target sprite,
-   *   used to highlight tiles that have already been imported.
+   * @param {File} file
+   * @param {object[]} [existingCostumes] - VM costume objects already on the target sprite.
+   *   Used to highlight tiles whose pixel content is already imported.
    */
-  open(file, costumeNames = []) {
+  open(file, existingCostumes = []) {
     this._anchorIndex = _lastAnchorIndex;
-    this._costumeNames = costumeNames;
+    this._costumeHashes = null;
+    // Decode existing costumes to pixel hashes eagerly so the grid can be
+    // highlighted as soon as decoding finishes (usually before the user is done
+    // configuring the grid).
+    this._decodeCostumes(existingCostumes).then(() => this._updateImported());
     return new Promise((resolve) => {
       this._resolve = resolve;
       this._buildDOM(file);
@@ -292,7 +298,6 @@ export default class SpriteSheetDialog {
     this._clearAllBtn.addEventListener("click", () => this._tileGrid?.clearAll());
     this._tileWInput.addEventListener("change", () => this._onGridInputChange());
     this._tileHInput.addEventListener("change", () => this._onGridInputChange());
-    this._nameInput.addEventListener("input", () => this._updateImported());
     this._zoomInBtn.addEventListener("click", () => this._zoomIn());
     this._zoomOutBtn.addEventListener("click", () => this._zoomOut());
     this._zoomResetBtn.addEventListener("click", () => this._setZoom(1));
@@ -413,26 +418,63 @@ export default class SpriteSheetDialog {
   // ─── Already-imported highlighting ──────────────────────────────────────────
 
   /**
-   * Return the set of tile keys ("col:row") that already have a costume on the
-   * sprite with the current base name.
+   * Decode each existing costume's PNG to raw pixels and compute a djb2 hash.
+   * Stored in `_costumeHashes` so `_computeImported` can do synchronous lookups.
+   * Non-decodable costumes (SVGs with rendering issues, etc.) are silently skipped.
    *
-   * @param {number} cols
-   * @param {number} rows
+   * @param {object[]} costumes - VM costume objects.
+   */
+  async _decodeCostumes(costumes) {
+    const hashes = new Set();
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    for (const costume of costumes) {
+      const bytes = costume.asset?.data;
+      if (!bytes) continue;
+      try {
+        const mime = costume.dataFormat === "svg" ? "image/svg+xml" : "image/png";
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        ctx.clearRect(0, 0, bitmap.width, bitmap.height);
+        ctx.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        hashes.add(
+          SpriteSheetAnalyzer.hashImageData(ctx.getImageData(0, 0, canvas.width, canvas.height))
+        );
+      } catch {
+        // Skip costumes that cannot be decoded (e.g., corrupt assets).
+      }
+    }
+
+    this._costumeHashes = hashes;
+  }
+
+  /**
+   * Return the set of tile keys ("col:row") whose pixel content exactly matches
+   * a costume already on the sprite (by djb2 hash of raw RGBA pixel data).
+   * Returns an empty set if costume decoding has not finished yet.
+   *
+   * @param {number} [cols]
+   * @param {number} [rows]
    * @returns {Set<string>}
    */
   _computeImported(cols = this._cols, rows = this._rows) {
-    const baseName = this._nameInput?.value.trim() || "costume";
-    const nameSet = new Set(this._costumeNames);
+    if (!this._costumeHashes || !this._analyzer) return new Set();
     const imported = new Set();
     for (let r = 1; r <= rows; r++) {
       for (let c = 1; c <= cols; c++) {
-        if (nameSet.has(`${baseName}:${c}:${r}`)) imported.add(`${c}:${r}`);
+        const tileData = this._analyzer.getTileImageData(c, r, cols, rows);
+        if (this._costumeHashes.has(SpriteSheetAnalyzer.hashImageData(tileData))) {
+          imported.add(`${c}:${r}`);
+        }
       }
     }
     return imported;
   }
 
-  /** Recompute the imported set after the base name changes and refresh the grid. */
+  /** Recompute the imported set and refresh the grid overlay. */
   _updateImported() {
     if (!this._tileGrid) return;
     this._tileGrid.setImported(this._computeImported());
