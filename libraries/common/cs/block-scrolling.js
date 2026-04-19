@@ -38,8 +38,10 @@ function getFindBarDropdownWidth() {
  */
 export function initializeSmoothScrolling(blockly) {
   _blocklyInstance = blockly;
-  // New Blockly (registry-based) has different scrollbar internals - use instant scroll only
-  if (!blockly.registry) {
+  // New Blockly (registry-based) has different scrollbar internals — use a public-API animator
+  if (blockly.registry) {
+    _smoothScrollAnimator = createNewBlocklySmoothScrollAnimator();
+  } else {
     _smoothScrollAnimator = createSmoothScrollAnimator(blockly);
   }
 }
@@ -169,6 +171,79 @@ export function scrollPosFromOffset(offset, metrics) {
   return {
     sx: offset.left - scrollLeft,
     sy: offset.top - scrollTop,
+  };
+}
+
+/**
+ * Create a smooth scroll animator that works with new Blockly using only public APIs.
+ * Animates by interpolating between current and target scroll positions via workspace.scrollbar.set().
+ *
+ * @param {number} [duration=300] - Animation duration in milliseconds
+ * @returns {Function} Animation function (workspace, sx, sy) => Promise<void>
+ */
+export function createNewBlocklySmoothScrollAnimator(duration = 300) {
+  let cancelAnimation = null;
+
+  return function animateScroll(workspace, targetSx, targetSy) {
+    // Cancel any in-progress animation
+    if (cancelAnimation) {
+      cancelAnimation();
+    }
+
+    return new Promise((resolve) => {
+      let cancelled = false;
+
+      cancelAnimation = () => {
+        cancelled = true;
+        cancelAnimation = null;
+        resolve();
+      };
+
+      // Derive current scroll position from metrics (public API)
+      const getScrollPos = () => {
+        const m = workspace.getMetrics();
+        const scrollLeft = m.scrollLeft ?? m.contentLeft ?? 0;
+        const scrollTop = m.scrollTop ?? m.contentTop ?? 0;
+        return {
+          sx: m.viewLeft - scrollLeft,
+          sy: m.viewTop - scrollTop,
+        };
+      };
+
+      const start = getScrollPos();
+      const deltaX = targetSx - start.sx;
+      const deltaY = targetSy - start.sy;
+      const dist = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+      // Skip animation for tiny movements
+      if (dist < 2) {
+        workspace.scrollbar.set(targetSx, targetSy);
+        cancelAnimation = null;
+        resolve();
+        return;
+      }
+
+      const scaledDuration = Math.min(300, Math.max(50, duration * (dist / 100)));
+      const startTime = Date.now();
+
+      const animate = () => {
+        if (cancelled) return;
+
+        const progress = Math.min((Date.now() - startTime) / scaledDuration, 1);
+        const ease = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+
+        workspace.scrollbar.set(start.sx + deltaX * ease, start.sy + deltaY * ease);
+
+        if (progress < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          cancelAnimation = null;
+          resolve();
+        }
+      };
+
+      animate();
+    });
   };
 }
 
