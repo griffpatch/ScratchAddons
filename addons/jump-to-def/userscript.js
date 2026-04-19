@@ -15,6 +15,15 @@ export default async function ({ addon, msg, console }) {
         if (procCode && procCode === findProcCode) {
           // Found... navigate to it!
           utils.scrollBlockIntoView(root);
+
+          // Also activate the find-bar carousel for this procedure
+          const findBarEvent = new CustomEvent("scratch-addons-find-bar-activate", {
+            detail: {
+              blockId: root.id ? root.id : root.getId ? root.getId() : null,
+              instanceBlock: null, // pass null to force jump to definition!
+            },
+          });
+          document.dispatchEvent(findBarEvent);
         }
       }
     }
@@ -22,7 +31,7 @@ export default async function ({ addon, msg, console }) {
 
   Object.defineProperty(Blockly.Gesture.prototype, "jumpToDef", {
     get() {
-      return !addon.self.disabled;
+      return !addon.self.disabled && !Blockly.Gesture.prototype.exploreBlocks;
     },
   });
 
@@ -48,11 +57,14 @@ export default async function ({ addon, msg, console }) {
   addon.tab.createBlockContextMenu(
     (items, block) => {
       if (!addon.self.disabled && block.type === "procedures_call") {
-        items.push({
-          enabled: true,
-          text: msg("to-def"),
-          callback: () => jumpToBlockDefinition(block),
-        });
+        // Check if find-bar is active via its Blockly.Gesture property
+        if (Blockly.Gesture.prototype.jumpToDef) {
+          items.push({
+            enabled: true,
+            text: msg("to-def"),
+            callback: () => jumpToBlockDefinition(block),
+          });
+        }
       }
       return items;
     },
