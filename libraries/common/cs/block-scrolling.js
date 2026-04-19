@@ -38,12 +38,7 @@ function getFindBarDropdownWidth() {
  */
 export function initializeSmoothScrolling(blockly) {
   _blocklyInstance = blockly;
-  // New Blockly (registry-based) has different scrollbar internals — use a public-API animator
-  if (blockly.registry) {
-    _smoothScrollAnimator = createNewBlocklySmoothScrollAnimator();
-  } else {
-    _smoothScrollAnimator = createSmoothScrollAnimator(blockly);
-  }
+  _smoothScrollAnimator = createSmoothScrollAnimator(blockly);
 }
 
 /**
@@ -175,55 +170,125 @@ export function scrollPosFromOffset(offset, metrics) {
 }
 
 /**
- * Create a smooth scroll animator that works with new Blockly using only public APIs.
- * Animates by interpolating between current and target scroll positions via workspace.scrollbar.set().
+ * Create a scroll adapter that abstracts Blockly version differences.
+ * Returns getScrollPos/setScrollPos methods appropriate for the Blockly version.
  *
- * @param {number} [duration=300] - Animation duration in milliseconds
+ * New Blockly uses only public APIs (getMetrics / scrollbar.set).
+ * Old Blockly drives the scrollbar handle directly for smooth per-frame updates.
+ *
+ * @param {any} blockly - The Blockly instance
+ * @returns {{getScrollPos: Function, setScrollPos: Function}}
+ */
+function createScrollAdapter(blockly) {
+  if (blockly.registry) {
+    // New Blockly: derive position from metrics, apply via public scrollbar.set()
+    return {
+      getScrollPos(workspace) {
+        const m = workspace.getMetrics();
+        const scrollLeft = m.scrollLeft ?? m.contentLeft ?? 0;
+        const scrollTop = m.scrollTop ?? m.contentTop ?? 0;
+        return { sx: m.viewLeft - scrollLeft, sy: m.viewTop - scrollTop };
+      },
+      setScrollPos(workspace, sx, sy) {
+        workspace.scrollbar.set(sx, sy);
+      },
+    };
+  } else {
+    // Old Blockly: read/write the scrollbar handle position directly for smooth animation
+    return {
+      getScrollPos(workspace) {
+        const { hScroll, vScroll } = workspace.scrollbar;
+        return {
+          sx: hScroll.handlePosition_ / hScroll.ratio_,
+          sy: vScroll.handlePosition_ / vScroll.ratio_,
+        };
+      },
+      setScrollPos(workspace, sx, sy) {
+        const { hScroll, vScroll } = workspace.scrollbar;
+        const hx = sx * hScroll.ratio_;
+        const vy = sy * vScroll.ratio_;
+        hScroll.setHandlePosition(hx);
+        vScroll.setHandlePosition(vy);
+        workspace.setMetrics({
+          x: workspace.scrollbar.getRatio_(hx, hScroll.scrollViewSize_),
+          y: workspace.scrollbar.getRatio_(vy, vScroll.scrollViewSize_),
+        });
+      },
+    };
+  }
+}
+
+/**
+ * Create a smooth scroll animator compatible with both old and new Blockly.
+ * Uses an adapter to abstract version-specific scroll read/write APIs, while
+ * sharing the animation loop, user-interaction cancellation, and widget hiding.
+ *
+ * @param {any} blockly - The Blockly instance
+ * @param {number} [duration=300] - Base animation duration in milliseconds
  * @returns {Function} Animation function (workspace, sx, sy) => Promise<void>
  */
-export function createNewBlocklySmoothScrollAnimator(duration = 300) {
+export function createSmoothScrollAnimator(blockly, duration = 300) {
+  const adapter = createScrollAdapter(blockly);
   let cancelAnimation = null;
 
   return function animateScroll(workspace, targetSx, targetSy) {
-    // Cancel any in-progress animation
-    if (cancelAnimation) {
-      cancelAnimation();
-    }
-
     return new Promise((resolve) => {
+      if (cancelAnimation) {
+        cancelAnimation();
+      }
+
       let cancelled = false;
+      let userInteractionListeners = [];
+
+      const removeListeners = () => {
+        userInteractionListeners.forEach(({ el, type, fn }) => el.removeEventListener(type, fn));
+        userInteractionListeners = [];
+      };
 
       cancelAnimation = () => {
         cancelled = true;
         cancelAnimation = null;
+        removeListeners();
         resolve();
       };
 
-      // Derive current scroll position from metrics (public API)
-      const getScrollPos = () => {
-        const m = workspace.getMetrics();
-        const scrollLeft = m.scrollLeft ?? m.contentLeft ?? 0;
-        const scrollTop = m.scrollTop ?? m.contentTop ?? 0;
-        return {
-          sx: m.viewLeft - scrollLeft,
-          sy: m.viewTop - scrollTop,
-        };
-      };
-
-      const start = getScrollPos();
+      const start = adapter.getScrollPos(workspace);
       const deltaX = targetSx - start.sx;
       const deltaY = targetSy - start.sy;
       const dist = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 
-      // Skip animation for tiny movements
       if (dist < 2) {
-        workspace.scrollbar.set(targetSx, targetSy);
+        adapter.setScrollPos(workspace, targetSx, targetSy);
         cancelAnimation = null;
         resolve();
         return;
       }
 
       const scaledDuration = Math.min(300, Math.max(50, duration * (dist / 100)));
+
+      // Cancel animation if the user touches the scrollbar
+      const cancelOnUserInteraction = (e) => {
+        if (
+          e.target?.classList?.contains("blocklyScrollbarHandle") ||
+          e.target?.classList?.contains("blocklyScrollbarBackground")
+        ) {
+          cancelAnimation?.();
+        }
+      };
+      const svgGroup = workspace.svgGroup_;
+      if (svgGroup) {
+        svgGroup.addEventListener("mousedown", cancelOnUserInteraction, true);
+        svgGroup.addEventListener("touchstart", cancelOnUserInteraction, true);
+        userInteractionListeners.push(
+          { el: svgGroup, type: "mousedown", fn: cancelOnUserInteraction },
+          { el: svgGroup, type: "touchstart", fn: cancelOnUserInteraction }
+        );
+      }
+
+      // Hide any open widgets/dropdowns before animating
+      blockly.WidgetDiv?.hide(true);
+      blockly.DropDownDiv?.hideWithoutAnimation();
+
       const startTime = Date.now();
 
       const animate = () => {
@@ -232,154 +297,13 @@ export function createNewBlocklySmoothScrollAnimator(duration = 300) {
         const progress = Math.min((Date.now() - startTime) / scaledDuration, 1);
         const ease = 1 - Math.pow(1 - progress, 3); // ease-out cubic
 
-        workspace.scrollbar.set(start.sx + deltaX * ease, start.sy + deltaY * ease);
+        adapter.setScrollPos(workspace, start.sx + deltaX * ease, start.sy + deltaY * ease);
 
         if (progress < 1) {
           requestAnimationFrame(animate);
         } else {
           cancelAnimation = null;
-          resolve();
-        }
-      };
-
-      animate();
-    });
-  };
-}
-
-/**
- * Create a smooth scroll animation function that can be passed to scrollBlockIntoViewIfNeeded.
- * This is more advanced and requires Blockly instance for widget management.
- *
- * @param {any} blockly - The Blockly instance (for widget management)
- * @param {number} [duration=300] - Animation duration in milliseconds
- * @returns {Function} Animation function (workspace, sx, sy) => Promise<void>
- */
-export function createSmoothScrollAnimator(blockly, duration = 300) {
-  let cancelAnimation = null;
-
-  return function animateScroll(workspace, targetSx, targetSy) {
-    return new Promise((resolve) => {
-      // Cancel any existing animation
-      if (cancelAnimation) {
-        cancelAnimation();
-      }
-
-      let cancelled = false;
-      let userInteractionListeners = [];
-
-      const removeUserInteractionListeners = () => {
-        userInteractionListeners.forEach(({ element, event, handler }) => {
-          element.removeEventListener(event, handler);
-        });
-        userInteractionListeners = [];
-      };
-
-      cancelAnimation = () => {
-        cancelled = true;
-        cancelAnimation = null;
-        removeUserInteractionListeners();
-        resolve();
-      };
-
-      const scrollbar = workspace.scrollbar;
-      const hScroll = scrollbar.hScroll;
-      const vScroll = scrollbar.vScroll;
-
-      // Get current handle positions (actual scroll state)
-      const startHandleX = hScroll.handlePosition_;
-      const startHandleY = vScroll.handlePosition_;
-
-      // Calculate target handle positions using the same ratio conversion
-      const targetHandleX = targetSx * hScroll.ratio_;
-      const targetHandleY = targetSy * vScroll.ratio_;
-
-      // Calculate the distance to scroll
-      const deltaX = targetHandleX - startHandleX;
-      const deltaY = targetHandleY - startHandleY;
-      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-
-      // Skip animation if the distance is very small (less than 2 pixels of handle movement)
-      if (distance < 2) {
-        // Just jump to the target immediately
-        hScroll.setHandlePosition(targetHandleX);
-        vScroll.setHandlePosition(targetHandleY);
-        const metrics = {};
-        metrics.x = scrollbar.getRatio_(targetHandleX, hScroll.scrollViewSize_);
-        metrics.y = scrollbar.getRatio_(targetHandleY, vScroll.scrollViewSize_);
-        workspace.setMetrics(metrics);
-        cancelAnimation = null;
-        resolve();
-        return;
-      }
-
-      // Scale duration based on distance (shorter animations for small movements)
-      // Min 50ms, max 300ms, scaled by distance
-      const scaledDuration = Math.min(300, Math.max(50, duration * (distance / 100)));
-
-      // Listen for user interaction with scrollbars to cancel animation immediately
-      const cancelOnUserInteraction = (e) => {
-        // Only cancel if the user is actually interacting with scrollbars
-        if (
-          e.target &&
-          (e.target.classList?.contains("blocklyScrollbarHandle") ||
-            e.target.classList?.contains("blocklyScrollbarBackground"))
-        ) {
-          if (cancelAnimation) {
-            cancelAnimation();
-          }
-        }
-      };
-
-      // Listen on the scrollbar elements
-      const svgGroup = workspace.svgGroup_;
-      if (svgGroup) {
-        svgGroup.addEventListener("mousedown", cancelOnUserInteraction, true);
-        svgGroup.addEventListener("touchstart", cancelOnUserInteraction, true);
-        userInteractionListeners.push(
-          { element: svgGroup, event: "mousedown", handler: cancelOnUserInteraction },
-          { element: svgGroup, event: "touchstart", handler: cancelOnUserInteraction }
-        );
-      }
-
-      // Hide any open widgets/dropdowns
-      if (blockly?.WidgetDiv) {
-        blockly.WidgetDiv.hide(true);
-      }
-      if (blockly?.DropDownDiv) {
-        blockly.DropDownDiv.hideWithoutAnimation();
-      }
-
-      const startTime = Date.now();
-
-      const animate = () => {
-        if (cancelled) {
-          return;
-        }
-
-        const elapsed = Date.now() - startTime;
-        const progress = Math.min(elapsed / scaledDuration, 1);
-        const ease = 1 - Math.pow(1 - progress, 3); // ease-out cubic
-
-        const currentHandleX = startHandleX + deltaX * ease;
-        const currentHandleY = startHandleY + deltaY * ease;
-
-        // Update handle positions
-        hScroll.setHandlePosition(currentHandleX);
-        vScroll.setHandlePosition(currentHandleY);
-
-        // Update workspace metrics
-        const metrics = {};
-        metrics.x = scrollbar.getRatio_(currentHandleX, hScroll.scrollViewSize_);
-        metrics.y = scrollbar.getRatio_(currentHandleY, vScroll.scrollViewSize_);
-        workspace.setMetrics(metrics);
-
-        if (progress < 1) {
-          requestAnimationFrame(animate);
-        } else {
-          // Animation complete
-          cancelAnimation = null;
-          removeUserInteractionListeners();
+          removeListeners();
           resolve();
         }
       };
