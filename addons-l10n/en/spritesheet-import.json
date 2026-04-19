@@ -1,8 +1,8 @@
 {
   "spritesheet-import/menu-item": "Upload Sprite Sheet",
   "spritesheet-import/dialog-title": "Import Sprite Sheet",
-  "spritesheet-import/columns": "Columns",
-  "spritesheet-import/rows": "Rows",
+  "spritesheet-import/tile-width": "Tile width (px)",
+  "spritesheet-import/tile-height": "Tile height (px)",
   "spritesheet-import/auto-detect": "Auto-detect",
   "spritesheet-import/auto-detect-high": "Auto-detected (high confidence)",
   "spritesheet-import/auto-detect-medium": "Auto-detected (medium confidence)",
@@ -10,6 +10,7 @@
   "spritesheet-import/select-all": "Select All",
   "spritesheet-import/clear-all": "Clear All",
   "spritesheet-import/name-label": "Costume name",
+  "spritesheet-import/replace-existing": "Replace previous import",
   "spritesheet-import/anchor-label": "Anchor",
   "spritesheet-import/cancel": "Cancel",
   "spritesheet-import/import-button": "Import {count} costume(s)",

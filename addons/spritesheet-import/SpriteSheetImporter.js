@@ -52,7 +52,7 @@ export default class SpriteSheetImporter {
    * @param {number} spec.anchorIndex - 0–8 anchor position.
    * @param {Function} [spec.onProgress] - Called with (imported, total) after each tile.
    */
-  async import(img, { tiles, cols, rows, baseName, anchorIndex, onProgress }) {
+  async import(img, { tiles, cols, rows, baseName, anchorIndex, replaceExisting = false, onProgress }) {
     const storage = this._storage;
     const vm = this._vm;
 
@@ -69,6 +69,19 @@ export default class SpriteSheetImporter {
 
     const target = vm.runtime.getTargetById(this._targetId);
     if (!target) throw new Error(`SpriteSheetImporter: target ${this._targetId} not found`);
+
+    // Remove all existing costumes with this base name prefix before importing.
+    if (replaceExisting) {
+      const prefix = `${baseName}:`;
+      for (let i = target.sprite.costumes_.length - 1; i >= 0; i--) {
+        if (target.sprite.costumes_[i].name.startsWith(prefix)) {
+          if (target.currentCostume >= i) {
+            target.currentCostume = Math.max(0, target.currentCostume - 1);
+          }
+          target.sprite.deleteCostumeAt(i);
+        }
+      }
+    }
 
     for (let i = 0; i < tiles.length; i++) {
       const { col, row } = tiles[i];
