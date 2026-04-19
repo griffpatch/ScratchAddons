@@ -10,13 +10,15 @@ export default class SpriteSheetTileGrid {
    * @param {number} cols
    * @param {number} rows
    * @param {Set<string>} selected - Initial selected set, keys are `"col:row"`.
+   * @param {Set<string>} blank - Set of tile keys that are fully transparent and unselectable.
    */
-  constructor(canvas, cols, rows, selected = new Set()) {
+  constructor(canvas, cols, rows, selected = new Set(), blank = new Set()) {
     this._canvas = canvas;
     this._ctx = canvas.getContext("2d");
     this._cols = cols;
     this._rows = rows;
     this._selected = new Set(selected);
+    this._blank = new Set(blank);
 
     /** Called with no args whenever selection changes. */
     this.onSelectionChange = null;
@@ -35,11 +37,12 @@ export default class SpriteSheetTileGrid {
 
   // ─── Public API ────────────────────────────────────────────────────────────
 
-  /** Update the grid dimensions and re-render. Selected set is reset. */
-  setGrid(cols, rows, selected = new Set()) {
+  /** Update the grid dimensions and re-render. Selected and blank sets are reset. */
+  setGrid(cols, rows, selected = new Set(), blank = new Set()) {
     this._cols = cols;
     this._rows = rows;
     this._selected = new Set(selected);
+    this._blank = new Set(blank);
     this.render();
   }
 
@@ -47,7 +50,10 @@ export default class SpriteSheetTileGrid {
     this._selected.clear();
     for (let r = 1; r <= this._rows; r++) {
       for (let c = 1; c <= this._cols; c++) {
-        this._selected.add(`${c}:${r}`);
+        // Blank tiles cannot be selected.
+        if (!this._blank.has(`${c}:${r}`)) {
+          this._selected.add(`${c}:${r}`);
+        }
       }
     }
     this.render();
@@ -85,30 +91,54 @@ export default class SpriteSheetTileGrid {
         const x = (c - 1) * tileW;
         const y = (r - 1) * tileH;
         const key = `${c}:${r}`;
-        const isSelected = this._selected.has(key);
-
-        // Tile fill — semi-transparent overlay
-        ctx.fillStyle = isSelected
-          ? "rgba(0, 100, 255, 0.25)"
-          : "rgba(0, 0, 0, 0.35)";
-        ctx.fillRect(x, y, tileW, tileH);
-
-        // Tile border
-        ctx.strokeStyle = isSelected
-          ? "rgba(0, 100, 255, 0.9)"
-          : "rgba(180, 180, 180, 0.6)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x + 0.5, y + 0.5, tileW - 1, tileH - 1);
-
-        // Small checkmark for selected tiles (if large enough to be legible)
-        if (isSelected && tileW >= 16 && tileH >= 16) {
-          ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-          ctx.font = `${Math.min(tileW, tileH) * 0.45}px sans-serif`;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText("✓", x + tileW / 2, y + tileH / 2);
+        if (this._blank.has(key)) {
+          this._renderBlankTile(ctx, x, y, tileW, tileH);
+        } else {
+          this._renderContentTile(ctx, x, y, tileW, tileH, this._selected.has(key));
         }
       }
+    }
+  }
+
+  /** Draw a hatched overlay for a blank (fully-transparent) tile. */
+  _renderBlankTile(ctx, x, y, w, h) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
+    ctx.fillRect(x, y, w, h);
+
+    // Diagonal hatching to indicate "empty / not importable".
+    const spacing = Math.max(6, Math.min(w, h) / 4);
+    ctx.save();
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(140, 140, 140, 0.35)";
+    ctx.lineWidth = 1;
+    for (let d = -h; d < w + h; d += spacing) {
+      ctx.moveTo(x + d, y);
+      ctx.lineTo(x + d + h, y + h);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.strokeStyle = "rgba(180, 180, 180, 0.25)";
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  }
+
+  /** Draw a selected or unselected content tile. */
+  _renderContentTile(ctx, x, y, w, h, isSelected) {
+    ctx.fillStyle = isSelected ? "rgba(0, 100, 255, 0.25)" : "rgba(0, 0, 0, 0.35)";
+    ctx.fillRect(x, y, w, h);
+
+    ctx.strokeStyle = isSelected ? "rgba(0, 100, 255, 0.9)" : "rgba(180, 180, 180, 0.6)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+    // Checkmark for selected tiles (only if large enough to be legible).
+    if (isSelected && w >= 16 && h >= 16) {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.font = `${Math.min(w, h) * 0.45}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("✓", x + w / 2, y + h / 2);
     }
   }
 
@@ -130,8 +160,12 @@ export default class SpriteSheetTileGrid {
   }
 
   _onMouseDown(e) {
+    // Only handle left-button clicks; middle-button is reserved for pan.
+    if (e.button !== 0) return;
     e.preventDefault();
     const { col, row } = this._tileAt(e.clientX, e.clientY);
+    // Blank tiles cannot be toggled.
+    if (this._blank.has(`${col}:${row}`)) return;
     // Target state = opposite of the clicked tile's current state.
     const targetState = !this._selected.has(`${col}:${row}`);
     // Snapshot current selection as baseline for the drag.
@@ -174,6 +208,8 @@ export default class SpriteSheetTileGrid {
     const maxR = Math.max(startRow, currentRow);
     for (let r = minR; r <= maxR; r++) {
       for (let c = minC; c <= maxC; c++) {
+        // Blank tiles are never selectable.
+        if (this._blank.has(`${c}:${r}`)) continue;
         if (targetState) {
           this._selected.add(`${c}:${r}`);
         } else {

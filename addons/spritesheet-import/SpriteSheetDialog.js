@@ -1,6 +1,12 @@
 import SpriteSheetAnalyzer from "./SpriteSheetAnalyzer.js";
 import SpriteSheetTileGrid from "./SpriteSheetTileGrid.js";
 
+/** Zoom levels available via the + / − buttons. */
+const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
+
+/** Persists the user's last chosen anchor across dialog opens. */
+let _lastAnchorIndex = 4;
+
 /**
  * SpriteSheetDialog — modal dialog for configuring and confirming a sprite sheet import.
  *
@@ -23,7 +29,11 @@ export default class SpriteSheetDialog {
     this._img = null;
     this._cols = 1;
     this._rows = 1;
-    this._anchorIndex = 4; // centre by default
+    this._tileW = 16;
+    this._tileH = 16;
+    this._anchorIndex = _lastAnchorIndex;
+    this._zoom = 1;
+    this._midDrag = null;
   }
 
   /**
@@ -31,9 +41,10 @@ export default class SpriteSheetDialog {
    *
    * @param {File} file
    * @returns {Promise<ImportSpec | null>}
-   *   Resolves with { tiles, cols, rows, baseName, anchorIndex } or null on cancel.
+   *   Resolves with { tiles, cols, rows, baseName, anchorIndex, replaceExisting } or null on cancel.
    */
   open(file) {
+    this._anchorIndex = _lastAnchorIndex;
     return new Promise((resolve) => {
       this._resolve = resolve;
       this._buildDOM(file);
@@ -63,62 +74,94 @@ export default class SpriteSheetDialog {
       textContent: msg("dialog-title"),
     });
 
-    // Preview area: outer wrap + inner (inline-block to size to image) + canvas overlay
+    // ── Left column: image preview ────────────────────────────────────────────
+    const previewCol = Object.assign(document.createElement("div"), {
+      className: "sa-ss-preview-col",
+    });
+
+    // Zoom bar
+    const zoomBar = Object.assign(document.createElement("div"), {
+      className: "sa-ss-zoom-bar",
+    });
+    this._zoomOutBtn = Object.assign(document.createElement("button"), {
+      className: "sa-ss-btn sa-ss-btn-secondary sa-ss-zoom-btn",
+      textContent: "−",
+      title: "Zoom out",
+    });
+    this._zoomLabel = Object.assign(document.createElement("span"), {
+      className: "sa-ss-zoom-label",
+      textContent: "100%",
+    });
+    this._zoomInBtn = Object.assign(document.createElement("button"), {
+      className: "sa-ss-btn sa-ss-btn-secondary sa-ss-zoom-btn",
+      textContent: "+",
+      title: "Zoom in",
+    });
+    this._zoomResetBtn = Object.assign(document.createElement("button"), {
+      className: "sa-ss-btn sa-ss-btn-secondary sa-ss-zoom-btn",
+      textContent: "⟳",
+      title: "Reset zoom (100%)",
+    });
+    zoomBar.append(this._zoomOutBtn, this._zoomLabel, this._zoomInBtn, this._zoomResetBtn);
+
+    // Preview area: scrollable wrap → inner div (inline-block at zoom size) → img + canvas
     this._previewWrap = Object.assign(document.createElement("div"), {
       className: "sa-ss-preview-wrap",
     });
     this._previewInner = Object.assign(document.createElement("div"), {
       className: "sa-ss-preview-inner",
     });
-
     this._previewImg = Object.assign(document.createElement("img"), {
       className: "sa-ss-preview-img",
       draggable: false,
     });
-
     this._overlayCanvas = Object.assign(document.createElement("canvas"), {
       className: "sa-ss-overlay",
     });
-
     this._previewInner.append(this._previewImg, this._overlayCanvas);
     this._previewWrap.append(this._previewInner);
 
-    // Grid controls row
+    previewCol.append(zoomBar, this._previewWrap);
+
+    // ── Right column: controls ────────────────────────────────────────────────
+    const controlsCol = Object.assign(document.createElement("div"), {
+      className: "sa-ss-controls-col",
+    });
+
+    // Tile size controls
     const gridControls = Object.assign(document.createElement("div"), {
       className: "sa-ss-grid-controls",
     });
 
-    // Columns
-    const colsLabel = Object.assign(document.createElement("label"), {
+    const tileWLabel = Object.assign(document.createElement("label"), {
       className: "sa-ss-spinner-label",
     });
-    colsLabel.append(
-      Object.assign(document.createElement("span"), { textContent: msg("columns") })
+    tileWLabel.append(
+      Object.assign(document.createElement("span"), { textContent: msg("tile-width") })
     );
-    this._colsInput = Object.assign(document.createElement("input"), {
+    this._tileWInput = Object.assign(document.createElement("input"), {
       type: "number",
       className: "sa-ss-spinner",
       min: "1",
-      max: "512",
-      value: "1",
+      max: "2048",
+      value: "16",
     });
-    colsLabel.append(this._colsInput);
+    tileWLabel.append(this._tileWInput);
 
-    // Rows
-    const rowsLabel = Object.assign(document.createElement("label"), {
+    const tileHLabel = Object.assign(document.createElement("label"), {
       className: "sa-ss-spinner-label",
     });
-    rowsLabel.append(
-      Object.assign(document.createElement("span"), { textContent: msg("rows") })
+    tileHLabel.append(
+      Object.assign(document.createElement("span"), { textContent: msg("tile-height") })
     );
-    this._rowsInput = Object.assign(document.createElement("input"), {
+    this._tileHInput = Object.assign(document.createElement("input"), {
       type: "number",
       className: "sa-ss-spinner",
       min: "1",
-      max: "512",
-      value: "1",
+      max: "2048",
+      value: "16",
     });
-    rowsLabel.append(this._rowsInput);
+    tileHLabel.append(this._tileHInput);
 
     // Auto-detect button
     this._autoDetectBtn = Object.assign(document.createElement("button"), {
@@ -131,9 +174,9 @@ export default class SpriteSheetDialog {
       className: "sa-ss-detect-msg",
     });
 
-    gridControls.append(colsLabel, rowsLabel, this._autoDetectBtn, this._detectMsg);
+    gridControls.append(tileWLabel, tileHLabel, this._autoDetectBtn, this._detectMsg);
 
-    // Selection controls row
+    // Selection controls
     const selControls = Object.assign(document.createElement("div"), {
       className: "sa-ss-sel-controls",
     });
@@ -149,7 +192,7 @@ export default class SpriteSheetDialog {
 
     selControls.append(this._selectAllBtn, this._clearAllBtn);
 
-    // Costume name row
+    // Costume name
     const nameRow = Object.assign(document.createElement("div"), {
       className: "sa-ss-name-row",
     });
@@ -166,7 +209,21 @@ export default class SpriteSheetDialog {
     nameLabel.append(this._nameInput);
     nameRow.append(nameLabel);
 
-    // Anchor picker row
+    // Replace previous import checkbox
+    const replaceRow = Object.assign(document.createElement("label"), {
+      className: "sa-ss-replace-row",
+      title: "Removes all existing costumes whose name starts with '<name>:' before importing",
+    });
+    this._replaceCheckbox = Object.assign(document.createElement("input"), {
+      type: "checkbox",
+      className: "sa-ss-replace-checkbox",
+    });
+    replaceRow.append(
+      this._replaceCheckbox,
+      Object.assign(document.createElement("span"), { textContent: msg("replace-existing") })
+    );
+
+    // Anchor picker
     const anchorRow = Object.assign(document.createElement("div"), {
       className: "sa-ss-anchor-row",
     });
@@ -192,6 +249,14 @@ export default class SpriteSheetDialog {
     anchorRow.append(this._anchorGrid);
     this._setAnchor(this._anchorIndex);
 
+    controlsCol.append(gridControls, selControls, nameRow, replaceRow, anchorRow);
+
+    // ── Body (two-column) ─────────────────────────────────────────────────────
+    const body = Object.assign(document.createElement("div"), {
+      className: "sa-ss-body",
+    });
+    body.append(previewCol, controlsCol);
+
     // Footer
     const footer = Object.assign(document.createElement("div"), {
       className: "sa-ss-footer",
@@ -206,15 +271,7 @@ export default class SpriteSheetDialog {
     footer.append(this._cancelBtn, this._importBtn);
 
     // Assemble
-    this._dialog.append(
-      title,
-      this._previewWrap,
-      gridControls,
-      selControls,
-      nameRow,
-      anchorRow,
-      footer
-    );
+    this._dialog.append(title, body, footer);
     this._backdrop.append(this._dialog);
     document.body.append(this._backdrop);
 
@@ -227,8 +284,17 @@ export default class SpriteSheetDialog {
     this._autoDetectBtn.addEventListener("click", () => this._runAutoDetect());
     this._selectAllBtn.addEventListener("click", () => this._tileGrid?.selectAll());
     this._clearAllBtn.addEventListener("click", () => this._tileGrid?.clearAll());
-    this._colsInput.addEventListener("change", () => this._onGridInputChange());
-    this._rowsInput.addEventListener("change", () => this._onGridInputChange());
+    this._tileWInput.addEventListener("change", () => this._onGridInputChange());
+    this._tileHInput.addEventListener("change", () => this._onGridInputChange());
+    this._zoomInBtn.addEventListener("click", () => this._zoomIn());
+    this._zoomOutBtn.addEventListener("click", () => this._zoomOut());
+    this._zoomResetBtn.addEventListener("click", () => this._setZoom(1));
+
+    // Middle-button pan on the preview wrap
+    this._previewWrap.addEventListener("mousedown", (e) => this._onWrapMouseDown(e));
+    this._previewWrap.addEventListener("mousemove", (e) => this._onWrapMouseMove(e));
+    this._previewWrap.addEventListener("mouseup", (e) => this._onWrapMouseUp(e));
+    this._previewWrap.addEventListener("mouseleave", () => this._onWrapMouseLeave());
 
     // Load image and initialize
     this._loadImage(file);
@@ -246,6 +312,7 @@ export default class SpriteSheetDialog {
       this._analyzer = new SpriteSheetAnalyzer(this._img);
       this._overlayCanvas.width = this._analyzer.imageWidth;
       this._overlayCanvas.height = this._analyzer.imageHeight;
+      this._setZoom(1);
       this._runAutoDetect();
     };
     this._previewImg.src = url;
@@ -265,8 +332,11 @@ export default class SpriteSheetDialog {
   // ─── Grid management ────────────────────────────────────────────────────────
 
   _onGridInputChange() {
-    const cols = Math.max(1, parseInt(this._colsInput.value, 10) || 1);
-    const rows = Math.max(1, parseInt(this._rowsInput.value, 10) || 1);
+    if (!this._analyzer) return;
+    const tileW = Math.max(1, parseInt(this._tileWInput.value, 10) || 1);
+    const tileH = Math.max(1, parseInt(this._tileHInput.value, 10) || 1);
+    const cols = Math.max(1, Math.floor(this._analyzer.imageWidth / tileW));
+    const rows = Math.max(1, Math.floor(this._analyzer.imageHeight / tileH));
     this._applyGrid(cols, rows);
     this._detectMsg.textContent = "";
   }
@@ -280,30 +350,39 @@ export default class SpriteSheetDialog {
   _applyGrid(cols, rows) {
     this._cols = cols;
     this._rows = rows;
-    this._colsInput.value = String(cols);
-    this._rowsInput.value = String(rows);
+    if (this._analyzer) {
+      this._tileW = Math.floor(this._analyzer.imageWidth / cols);
+      this._tileH = Math.floor(this._analyzer.imageHeight / rows);
+      this._tileWInput.value = String(this._tileW);
+      this._tileHInput.value = String(this._tileH);
+    }
 
-    // Compute initial selection: all non-blank tiles.
+    // Compute which tiles are blank (fully transparent).
+    const blank = new Set();
     const selected = new Set();
     if (this._analyzer) {
       for (let r = 1; r <= rows; r++) {
         for (let c = 1; c <= cols; c++) {
+          const key = `${c}:${r}`;
           const tileData = this._analyzer.getTileImageData(c, r, cols, rows);
-          if (!this._analyzer.isTileBlank(tileData)) {
-            selected.add(`${c}:${r}`);
+          if (this._analyzer.isTileBlank(tileData)) {
+            blank.add(key);
+          } else {
+            selected.add(key);
           }
         }
       }
     }
 
     if (this._tileGrid) {
-      this._tileGrid.setGrid(cols, rows, selected);
+      this._tileGrid.setGrid(cols, rows, selected, blank);
     } else {
       this._tileGrid = new SpriteSheetTileGrid(
         this._overlayCanvas,
         cols,
         rows,
-        selected
+        selected,
+        blank
       );
       this._tileGrid.onSelectionChange = () => this._updateImportButton();
     }
@@ -315,6 +394,7 @@ export default class SpriteSheetDialog {
 
   _setAnchor(index) {
     this._anchorIndex = index;
+    _lastAnchorIndex = index;
     this._anchorBtns.forEach((btn, i) => {
       btn.classList.toggle("sa-ss-anchor-selected", i === index);
     });
@@ -327,6 +407,74 @@ export default class SpriteSheetDialog {
       "Bottom left", "Bottom center", "Bottom right",
     ];
     return labels[index] ?? "";
+  }
+
+  // ─── Zoom ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Set the zoom level and update the image/canvas CSS dimensions accordingly.
+   * The overlay canvas buffer (in pixels) stays fixed at natural image size;
+   * only its CSS display size changes, so _tileAt() (getBoundingClientRect) is
+   * automatically correct at every zoom level.
+   *
+   * @param {number} factor
+   */
+  _setZoom(factor) {
+    this._zoom = factor;
+    if (!this._analyzer) return;
+    const w = this._analyzer.imageWidth * factor;
+    const h = this._analyzer.imageHeight * factor;
+    this._previewImg.style.width = `${w}px`;
+    this._previewImg.style.height = `${h}px`;
+    this._overlayCanvas.style.width = `${w}px`;
+    this._overlayCanvas.style.height = `${h}px`;
+    this._previewInner.style.width = `${w}px`;
+    this._previewInner.style.height = `${h}px`;
+    this._zoomLabel.textContent = `${Math.round(factor * 100)}%`;
+  }
+
+  _zoomIn() {
+    const i = ZOOM_STEPS.findIndex((s) => s > this._zoom);
+    if (i !== -1) this._setZoom(ZOOM_STEPS[i]);
+  }
+
+  _zoomOut() {
+    const i = [...ZOOM_STEPS].reverse().findIndex((s) => s < this._zoom);
+    if (i !== -1) this._setZoom(ZOOM_STEPS[ZOOM_STEPS.length - 1 - i]);
+  }
+
+  // ─── Middle-button pan ────────────────────────────────────────────────────────
+
+  _onWrapMouseDown(e) {
+    if (e.button !== 1) return;
+    e.preventDefault(); // Prevent the browser's middle-click autoscroll indicator.
+    this._midDrag = {
+      startX: e.clientX,
+      startY: e.clientY,
+      scrollLeft: this._previewWrap.scrollLeft,
+      scrollTop: this._previewWrap.scrollTop,
+    };
+    this._previewWrap.classList.add("sa-ss-panning");
+  }
+
+  _onWrapMouseMove(e) {
+    if (!this._midDrag) return;
+    e.preventDefault();
+    this._previewWrap.scrollLeft = this._midDrag.scrollLeft - (e.clientX - this._midDrag.startX);
+    this._previewWrap.scrollTop = this._midDrag.scrollTop - (e.clientY - this._midDrag.startY);
+  }
+
+  _onWrapMouseUp(e) {
+    if (e.button !== 1 || !this._midDrag) return;
+    this._midDrag = null;
+    this._previewWrap.classList.remove("sa-ss-panning");
+  }
+
+  _onWrapMouseLeave() {
+    if (this._midDrag) {
+      this._midDrag = null;
+      this._previewWrap.classList.remove("sa-ss-panning");
+    }
   }
 
   // ─── Import button label ────────────────────────────────────────────────────
@@ -362,6 +510,7 @@ export default class SpriteSheetDialog {
       rows: this._rows,
       baseName: this._nameInput.value.trim() || "costume",
       anchorIndex: this._anchorIndex,
+      replaceExisting: this._replaceCheckbox.checked,
     };
 
     const resolve = this._resolve;
@@ -380,6 +529,7 @@ export default class SpriteSheetDialog {
     this._tileGrid = null;
     this._analyzer = null;
     this._img = null;
+    this._midDrag = null;
     this._resolve = null;
   }
 }

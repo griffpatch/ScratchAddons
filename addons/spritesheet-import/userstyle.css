@@ -14,23 +14,65 @@
 
 .sa-ss-dialog {
   background: var(--ui-modal-background, #fff);
-  color: var(--text-primary, #1e1e2e);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  color: var(--text-primary, #1e1e2e);
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: 92vh;
-  max-width: 90vw;
-  overflow: auto;
+  height: 88vh;
+  max-height: 88vh;
+  max-width: min(92vw, 1000px);
+  overflow: hidden;
   padding: 20px 24px 16px;
-  width: 680px;
+  width: 960px;
 }
 
 .sa-ss-title {
+  flex-shrink: 0;
   font-size: 1.1rem;
   font-weight: 700;
   margin: 0;
+}
+
+/* ─── Two-column body ────────────────────────────────────────────────────── */
+
+.sa-ss-body {
+  display: flex;
+  flex: 1;
+  gap: 16px;
+  min-height: 0; /* required for flex children to observe overflow */
+}
+
+/* ─── Left column: image preview ─────────────────────────────────────────── */
+
+.sa-ss-preview-col {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* ─── Zoom bar ───────────────────────────────────────────────────────────── */
+
+.sa-ss-zoom-bar {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.sa-ss-zoom-btn {
+  font-size: 1rem;
+  line-height: 1;
+  padding: 2px 8px;
+}
+
+.sa-ss-zoom-label {
+  font-size: 0.8rem;
+  min-width: 38px;
+  text-align: center;
 }
 
 /* ─── Image preview + canvas overlay ─────────────────────────────────────── */
@@ -39,32 +81,51 @@
   background: repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 0 0 / 16px 16px;
   border: 1px solid var(--ui-border, #ddd);
   border-radius: 4px;
-  max-height: 420px;
-  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.sa-ss-preview-wrap.sa-ss-panning {
+  cursor: grabbing;
+}
+
+/*
+ * The inner div is sized via JS to exactly imageWidth×zoom by imageHeight×zoom.
+ * display:inline-block prevents it from stretching to fill the wrap, so the
+ * wrap's scrollbars accurately reflect the zoomed content size.
+ */
+.sa-ss-preview-inner {
+  display: inline-block;
   position: relative;
-  text-align: center;
 }
 
 .sa-ss-preview-img {
   display: block;
-  max-height: 420px;
-  max-width: 100%;
-  /* The image is rendered inline; the canvas overlay is absolutely on top of it */
+  /* Width and height are set explicitly by JS to imageWidth * zoom. */
 }
 
 /*
- * The canvas overlay is sized to the image's natural dimensions in the DOM,
- * but CSS scales it to match the displayed image via inset:0 + object-fit:contain
- * sizing. We use pointer-events on the canvas only.
+ * The canvas buffer dimensions equal the natural image size; only the CSS
+ * display dimensions change with zoom. getBoundingClientRect() on the canvas
+ * therefore reflects the zoom, so _tileAt() coordinate mapping is correct
+ * at every zoom level without any extra math.
  */
 .sa-ss-overlay {
   cursor: crosshair;
   inset: 0;
-  /* display: block stretches the canvas to fill the wrapper; height/width are
-     the natural dimensions (set by JS). CSS max-height matches the preview. */
-  max-height: 420px;
-  max-width: 100%;
   position: absolute;
+}
+
+/* ─── Right column: controls ─────────────────────────────────────────────── */
+
+.sa-ss-controls-col {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 12px;
+  overflow-y: auto;
+  width: 220px;
 }
 
 /* ─── Controls rows ──────────────────────────────────────────────────────── */
@@ -95,6 +156,7 @@
   font-size: 0.8rem;
   font-style: italic;
   opacity: 0.75;
+  width: 100%;
 }
 
 .sa-ss-detect-msg[data-confidence="high"] {
@@ -114,29 +176,45 @@
 }
 
 .sa-ss-name-label {
-  align-items: center;
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   width: 100%;
+}
+
+.sa-ss-name-label > span {
+  align-self: flex-start;
+  font-size: 0.85rem;
 }
 
 .sa-ss-name-input {
   border: 1px solid var(--ui-border, #ccc);
   border-radius: 4px;
-  flex: 1;
   padding: 4px 8px;
+  width: 100%;
+}
+
+/* ─── Replace-existing checkbox ──────────────────────────────────────────── */
+
+.sa-ss-replace-row {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: 0.85rem;
+  gap: 6px;
 }
 
 /* ─── Anchor picker ──────────────────────────────────────────────────────── */
 
 .sa-ss-anchor-row {
-  align-items: center;
+  align-items: flex-start;
   display: flex;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .sa-ss-anchor-label {
-  white-space: nowrap;
+  font-size: 0.85rem;
 }
 
 .sa-ss-anchor-grid {
@@ -172,10 +250,12 @@
 /* ─── Footer ─────────────────────────────────────────────────────────────── */
 
 .sa-ss-footer {
+  border-top: 1px solid var(--ui-border, #e0e0e0);
   display: flex;
+  flex-shrink: 0;
   gap: 8px;
   justify-content: flex-end;
-  padding-top: 4px;
+  padding-top: 12px;
 }
 
 /* ─── Buttons ────────────────────────────────────────────────────────────── */
