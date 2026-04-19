@@ -1,0 +1,20 @@
+{
+  "name": "Sprite sheet importer",
+  "description": "Adds an 'Upload Sprite Sheet' option to the costume menu. Choose an image, set a tile grid, pick which tiles to import, and batch-import them as bitmap costumes.",
+  "tags": ["editor", "costumeEditor"],
+  "versionAdded": "1.40.0",
+  "dynamicEnable": true,
+  "dynamicDisable": true,
+  "userscripts": [
+    {
+      "url": "userscript.js",
+      "matches": ["projects"]
+    }
+  ],
+  "userstyles": [
+    {
+      "url": "userstyle.css",
+      "matches": ["projects"]
+    }
+  ]
+}
