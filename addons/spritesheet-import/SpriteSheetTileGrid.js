@@ -12,13 +12,14 @@ export default class SpriteSheetTileGrid {
    * @param {Set<string>} selected - Initial selected set, keys are `"col:row"`.
    * @param {Set<string>} blank - Set of tile keys that are fully transparent and unselectable.
    */
-  constructor(canvas, cols, rows, selected = new Set(), blank = new Set()) {
+  constructor(canvas, cols, rows, selected = new Set(), blank = new Set(), imported = new Set()) {
     this._canvas = canvas;
     this._ctx = canvas.getContext("2d");
     this._cols = cols;
     this._rows = rows;
     this._selected = new Set(selected);
     this._blank = new Set(blank);
+    this._imported = new Set(imported);
 
     /** Called with no args whenever selection changes. */
     this.onSelectionChange = null;
@@ -38,11 +39,18 @@ export default class SpriteSheetTileGrid {
   // ─── Public API ────────────────────────────────────────────────────────────
 
   /** Update the grid dimensions and re-render. Selected and blank sets are reset. */
-  setGrid(cols, rows, selected = new Set(), blank = new Set()) {
+  setGrid(cols, rows, selected = new Set(), blank = new Set(), imported = new Set()) {
     this._cols = cols;
     this._rows = rows;
     this._selected = new Set(selected);
     this._blank = new Set(blank);
+    this._imported = new Set(imported);
+    this.render();
+  }
+
+  /** Update only the imported-tile set and re-render (preserves selection). */
+  setImported(imported = new Set()) {
+    this._imported = new Set(imported);
     this.render();
   }
 
@@ -94,7 +102,7 @@ export default class SpriteSheetTileGrid {
         if (this._blank.has(key)) {
           this._renderBlankTile(ctx, x, y, tileW, tileH);
         } else {
-          this._renderContentTile(ctx, x, y, tileW, tileH, this._selected.has(key));
+          this._renderContentTile(ctx, x, y, tileW, tileH, this._selected.has(key), this._imported.has(key));
         }
       }
     }
@@ -123,22 +131,40 @@ export default class SpriteSheetTileGrid {
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
   }
 
-  /** Draw a selected or unselected content tile. */
-  _renderContentTile(ctx, x, y, w, h, isSelected) {
-    ctx.fillStyle = isSelected ? "rgba(0, 100, 255, 0.25)" : "rgba(0, 0, 0, 0.35)";
+  /** Draw a selected or unselected content tile. Imported tiles (already in sprite) are green. */
+  _renderContentTile(ctx, x, y, w, h, isSelected, isImported) {
+    // Fill
+    if (isImported) {
+      ctx.fillStyle = isSelected ? "rgba(0, 160, 80, 0.35)" : "rgba(0, 160, 80, 0.15)";
+    } else {
+      ctx.fillStyle = isSelected ? "rgba(0, 100, 255, 0.25)" : "rgba(0, 0, 0, 0.35)";
+    }
     ctx.fillRect(x, y, w, h);
 
-    ctx.strokeStyle = isSelected ? "rgba(0, 100, 255, 0.9)" : "rgba(180, 180, 180, 0.6)";
+    // Border
+    ctx.strokeStyle = isImported
+      ? isSelected ? "rgba(0, 210, 100, 0.95)" : "rgba(0, 160, 80, 0.75)"
+      : isSelected ? "rgba(0, 100, 255, 0.9)" : "rgba(180, 180, 180, 0.6)";
     ctx.lineWidth = 1;
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
-    // Checkmark for selected tiles (only if large enough to be legible).
-    if (isSelected && w >= 16 && h >= 16) {
-      ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-      ctx.font = `${Math.min(w, h) * 0.45}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("✓", x + w / 2, y + h / 2);
+    // Label (only if large enough to be legible)
+    if (w >= 16 && h >= 16) {
+      if (isSelected) {
+        // Checkmark for selected tiles.
+        ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+        ctx.font = `${Math.min(w, h) * 0.45}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("✓", x + w / 2, y + h / 2);
+      } else if (isImported) {
+        // Small indicator for unselected-but-already-imported tiles.
+        ctx.fillStyle = "rgba(0, 160, 80, 0.85)";
+        ctx.font = `${Math.min(w, h) * 0.3}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("•", x + w / 2, y + h / 2);
+      }
     }
   }
 
