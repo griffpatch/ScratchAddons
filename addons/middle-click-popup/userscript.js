@@ -151,7 +151,8 @@ export default async function ({ addon, msg, console }) {
 
     // @ts-ignore - registry exists in scratch-blocks but not in standard Blockly types
     if (Blockly.registry) {
-      // new Blockly: register delete area
+      // new Blockly: register delete area (remove first in case a previous open didn't clean up)
+      workspace.getComponentManager().removeComponent("saMiddleClickPopup");
       const component = new Blockly.DeleteArea();
       component.id = "saMiddleClickPopup";
       // @ts-ignore - Blockly type mismatch between versions
