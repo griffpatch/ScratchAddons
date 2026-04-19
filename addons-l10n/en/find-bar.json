@@ -1,4 +1,4 @@
-{
+﻿{
   "find-bar/find-placeholder": "Find (Ctrl+F)",
   "find-bar/complex-broadcast": "(expression)",
   "find-bar/var-local": {
@@ -17,5 +17,28 @@
     "string": "LIST {name}",
     "developer_comment": "Uppercase 'LIST' refers to a global list."
   },
-  "find-bar/event": "event {name}"
+  "find-bar/event": "event {name}",
+  "find-bar/group-broadcasts": "Broadcasts / Receivers",
+  "find-bar/group-events": "Events",
+  "find-bar/group-define": "My Blocks",
+  "find-bar/when-key-pressed": "when {key} key pressed",
+  "find-bar/when-this-sprite-clicked": "when this sprite clicked",
+  "find-bar/when-stage-clicked": "when stage clicked",
+  "find-bar/when-backdrop-switches": "when backdrop switches to {backdrop}",
+  "find-bar/when-greater-than": "when {option} >",
+  "find-bar/when-i-start-as-clone": "when I start as a clone",
+  "find-bar/clone-of-sprite": "clone of {sprite}",
+  "find-bar/when-flag-clicked": "when {flag} clicked",
+  "find-bar/group-variables-local": "Variables",
+  "find-bar/group-variables-global": "Variables - global",
+  "find-bar/group-lists-local": "Lists",
+  "find-bar/group-lists-global": "Lists - global",
+  "find-bar/group-costumes": "Costumes",
+  "find-bar/group-sounds": "Sounds",
+  "find-bar/group-clones": "Clones",
+  "find-bar/group-text": "Text Blocks",
+  "find-bar/delete-this-clone": "delete this clone",
+  "find-bar/create-clone-of-sprite": "create clone of {sprite}",
+  "find-bar/all-sprites-tooltip": "for all sprites",
+  "find-bar/explore-usages": "Explore Usages"
 }
