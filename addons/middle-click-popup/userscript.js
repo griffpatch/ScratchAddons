@@ -4,10 +4,16 @@ import WorkspaceQuerier, { QueryResult } from "./WorkspaceQuerier.js";
 import renderBlock, { BlockComponent, getBlockHeight } from "./BlockRenderer.js";
 import { BlockInstance, BlockShape, BlockTypeInfo } from "./BlockTypeInfo.js";
 import { onClearTextWidthCache } from "./module.js";
+import BlockNavigator from "./BlockNavigator.js";
+import Utils from "../find-bar/blockly/Utils.js";
 
 export default async function ({ addon, msg, console }) {
   const Blockly = await addon.tab.traps.getBlockly();
   const vm = addon.tab.traps.vm;
+
+  const focusTarget = /** @type {HTMLElement} */ (await addon.tab.waitForElement("svg.blocklySvg"));
+  const utils = new Utils(addon);
+  const blockNavigator = new BlockNavigator({ addon, console, focusTarget, utils });
 
   const PREVIEW_LIMIT = 50;
 
@@ -108,6 +114,11 @@ export default async function ({ addon, msg, console }) {
     // Don't show the menu if we're not in the code editor
     if (addon.tab.editorMode !== "editor") return;
     if (addon.tab.redux.state.scratchGui.editorTab.activeTabIndex !== 0) return;
+
+    // Exit navigation mode if active
+    if (blockNavigator.isActive()) {
+      blockNavigator.exit();
+    }
 
     Blockly.hideChaff();
 
