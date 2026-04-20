@@ -1,35 +1,27 @@
 /**
- * SpriteSheetWorker — pixel analysis in a dedicated Web Worker.
+ * Sprite sheet pixel analysis — grid detection, padding, and tile classification.
  *
- * Exported as a string constant so the caller can create a Blob URL without
- * needing the file to be declared in web_accessible_resources.
+ * Exported functions:
+ *   analyzeImage(img)        — Initialize pixel state and run full analysis.
+ *                              Returns { width, height, candidates, padding, blank, hashes }.
+ *   classifyGrid(cols, rows) — Classify a specific grid layout.
+ *                              Returns { blank, hashes }. Requires analyzeImage() first.
  *
- * Messages received by the worker:
- *   {type:'init', bitmap}               — ImageBitmap (transferred). Draws the
- *                                          bitmap, detects the grid, classifies
- *                                          the best candidate, then replies.
- *   {type:'classify', cols, rows, seq}  — Classify a specific grid layout.
- *
- * Messages sent by the worker:
- *   {type:'ready', width, height, candidates, padding, blank, hashes}
- *   {type:'classified', seq, blank, hashes}
- *     blank   — string[]              — "col:row" keys of fully-transparent tiles
- *     hashes  — Record<string,number> — djb2 RGBA hash per non-blank tile key
- *
- * The hash algorithm here MUST stay byte-for-byte identical to hashPixelData()
- * in SpriteSheetDialog.js — both sides hash costume pixel data for comparison.
+ * The hash algorithm in classifyTiles() MUST stay byte-for-byte identical to
+ * hashPixelData() in SpriteSheetDialog.js — both sides hash costume pixel data
+ * for comparison.
  */
-export const WORKER_CODE = `
-"use strict";
 
-let _ctx = null, _width = 0, _height = 0;
-// Full image pixel data — set once after drawImage so all analysis reads from memory.
+// Pixel state — initialized by analyzeImage(), reused by classifyGrid().
 let _pixels = null;
-// Per-column boundary stats: for each x, the sum and count of alpha values at that
-// column in rows where the horizontal neighbourhood (x-1..x+1) has any alpha.
-// Precomputed once; lets boundaryAlpha query any boundary column in O(1).
+let _width = 0, _height = 0;
+
+// Per-column boundary statistics: for each x, sum and count of alpha values at rows
+// where the horizontal neighbourhood (x-1..x+1) has any alpha. Lets boundaryAlpha()
+// query any column boundary in O(1) instead of scanning the full image height.
 let _colBndSum = null, _colBndCount = null;
-// Per-row boundary stats: same idea for horizontal boundaries.
+
+// Per-row boundary statistics: same idea for horizontal boundaries.
 let _rowBndSum = null, _rowBndCount = null;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -40,10 +32,9 @@ function divisors(n, max) {
   return d;
 }
 
-// ─── Grid detection ──────────────────────────────────────────────────────────
+// ─── Grid detection ───────────────────────────────────────────────────────────
 
-// boundaryAlpha uses precomputed _colBndSum/_rowBndSum arrays (O(1) per boundary)
-// instead of calling getImageData per strip. Precomputed in the init handler.
+// Uses precomputed _colBndSum/_rowBndSum arrays — O(1) per boundary column/row.
 function boundaryAlpha(cols, rows) {
   const tileW = _width / cols, tileH = _height / rows;
   let sum = 0, count = 0;
@@ -92,11 +83,10 @@ function detectGrid() {
     b.cols * b.rows - a.cols * a.rows
   );
 
-  // Finer-subdivision preference: a coarser grid (e.g. 32x32) is a subset of a finer
-  // grid's boundary lines, so it can score lower purely due to having fewer samples —
-  // not because it is actually more correct. If a finer grid that evenly subdivides the
-  // winner is within SUBDIVISION_GRACE score points, promote it instead.
-  // Example: 32x32 wins with score 5; 16x16 subdivides it and scores 25 → prefer 16x16.
+  // Subdivision promotion: a coarser grid (e.g. 32×32) can score lower than a finer
+  // grid (16×16) purely because it has fewer boundary lines to sample — not because
+  // it is more correct. If a finer grid that evenly subdivides the winner is within
+  // SUBDIVISION_GRACE score points, promote it.
   const SUBDIVISION_GRACE = 40;
   const winner = cands[0];
   for (let i = 1; i < cands.length; i++) {
@@ -104,36 +94,18 @@ function detectGrid() {
     if (c.score > winner.score + SUBDIVISION_GRACE) break;
     const winTW = Math.round(winner.tileW), winTH = Math.round(winner.tileH);
     const cTW = Math.round(c.tileW), cTH = Math.round(c.tileH);
-    // c must be a strictly finer grid that divides into winner's tile size.
+    // c must be a strictly finer grid whose tile size evenly divides the winner's.
     if (cTW < winTW && cTH < winTH && winTW % cTW === 0 && winTH % cTH === 0) {
-      console.log(
-        '[spritesheet-import worker] subdivision promotion: ' +
-        winner.cols + 'x' + winner.rows + ' (score ' + winner.score.toFixed(1) + ', alpha ' + winner.alpha.toFixed(1) + ') → ' +
-        c.cols + 'x' + c.rows + ' (score ' + c.score.toFixed(1) + ', alpha ' + c.alpha.toFixed(1) + ')'
-      );
       cands.splice(i, 1);
       cands.unshift(c);
       break;
     }
   }
 
-  // Log top candidates for diagnosis.
-  const topN = cands.slice(0, 10);
-  console.log('[spritesheet-import worker] top candidates:');
-  for (const c of topN) {
-    console.log(
-      '  ' + Math.round(c.tileW) + 'x' + Math.round(c.tileH) +
-      ' (' + c.cols + 'x' + c.rows + ')' +
-      '  alpha=' + c.alpha.toFixed(1) +
-      '  bonus=' + c.bonus +
-      '  score=' + c.score.toFixed(1)
-    );
-  }
-
   return cands.map((c, i) => ({
     cols: c.cols, rows: c.rows, score: c.score,
-    confidence: c.alpha < 10 ? 'high' : c.alpha < 60 ? 'medium'
-      : (c.bonus >= 100 && i === 0) ? 'medium' : 'low',
+    confidence: c.alpha < 10 ? "high" : c.alpha < 60 ? "medium"
+      : (c.bonus >= 100 && i === 0) ? "medium" : "low",
   }));
 }
 
@@ -148,13 +120,13 @@ function detectPadding(cols, rows) {
       let blank = true;
       outer: for (let ty = 0; ty < tileH; ty++)
         for (let tx = 0; tx < tileW; tx++)
-          if (_pixels[((y0+ty)*_width + x0+tx)*4+3]) { blank = false; break outer; }
+          if (_pixels[((y0 + ty) * _width + x0 + tx) * 4 + 3]) { blank = false; break outer; }
       if (blank) continue;
       let l = tileW, t = tileH, ri = tileW, b = tileH;
-      outer: for (let tx = 0; tx < tileW; tx++) for (let ty = 0; ty < tileH; ty++) { if (_pixels[((y0+ty)*_width+x0+tx)*4+3]) { l = tx; break outer; } }
-      outer: for (let tx = tileW-1; tx >= 0; tx--) for (let ty = 0; ty < tileH; ty++) { if (_pixels[((y0+ty)*_width+x0+tx)*4+3]) { ri = tileW-1-tx; break outer; } }
-      outer: for (let ty = 0; ty < tileH; ty++) for (let tx = 0; tx < tileW; tx++) { if (_pixels[((y0+ty)*_width+x0+tx)*4+3]) { t = ty; break outer; } }
-      outer: for (let ty = tileH-1; ty >= 0; ty--) for (let tx = 0; tx < tileW; tx++) { if (_pixels[((y0+ty)*_width+x0+tx)*4+3]) { b = tileH-1-ty; break outer; } }
+      outer: for (let tx = 0; tx < tileW; tx++) for (let ty = 0; ty < tileH; ty++) { if (_pixels[((y0 + ty) * _width + x0 + tx) * 4 + 3]) { l = tx; break outer; } }
+      outer: for (let tx = tileW - 1; tx >= 0; tx--) for (let ty = 0; ty < tileH; ty++) { if (_pixels[((y0 + ty) * _width + x0 + tx) * 4 + 3]) { ri = tileW - 1 - tx; break outer; } }
+      outer: for (let ty = 0; ty < tileH; ty++) for (let tx = 0; tx < tileW; tx++) { if (_pixels[((y0 + ty) * _width + x0 + tx) * 4 + 3]) { t = ty; break outer; } }
+      outer: for (let ty = tileH - 1; ty >= 0; ty--) for (let tx = 0; tx < tileW; tx++) { if (_pixels[((y0 + ty) * _width + x0 + tx) * 4 + 3]) { b = tileH - 1 - ty; break outer; } }
       lefts.push(l); tops.push(t); rights.push(ri); bottoms.push(b);
     }
   }
@@ -188,7 +160,7 @@ function classifyTiles(cols, rows) {
           h = ((h << 5) + h + _pixels[pi + 3]) | 0;
         }
       }
-      const key = c + ':' + r;
+      const key = `${c}:${r}`;
       if (isBlank) blank.push(key);
       else hashes[key] = h >>> 0;
     }
@@ -196,87 +168,72 @@ function classifyTiles(cols, rows) {
   return { blank, hashes };
 }
 
-// ─── Message handler ──────────────────────────────────────────────────────────
+// ─── Public API ───────────────────────────────────────────────────────────────
 
-self.onmessage = function(e) {
-  const { type } = e.data;
-  if (type === 'init') {
-    const { bitmap } = e.data;
-    _width = bitmap.width;
-    _height = bitmap.height;
+/**
+ * Draw img into an offscreen canvas, precompute boundary statistics, detect the
+ * best grid, detect padding, and classify tiles for the best candidate.
+ *
+ * @param {HTMLImageElement} img - A fully loaded spritesheet image.
+ * @returns {{ width: number, height: number, candidates: object[], padding: object,
+ *             blank: string[], hashes: Record<string, number> }}
+ */
+export function analyzeImage(img) {
+  _width = img.naturalWidth;
+  _height = img.naturalHeight;
 
-    const t0 = performance.now();
-    const canvas = new OffscreenCanvas(_width, _height);
-    _ctx = canvas.getContext('2d', { willReadFrequently: true });
-    _ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
-    const tDraw = performance.now();
+  const canvas = document.createElement("canvas");
+  canvas.width = _width;
+  canvas.height = _height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0);
 
-    // Read the full image once. All subsequent analysis uses _pixels directly —
-    // no further getImageData calls are made.
-    _pixels = _ctx.getImageData(0, 0, _width, _height).data;
+  // Read the full image once. All subsequent analysis reads from _pixels directly.
+  _pixels = ctx.getImageData(0, 0, _width, _height).data;
 
-    // Precompute per-column and per-row boundary alpha statistics.
-    // _colBndSum[x] / _colBndCount[x]: for column x, sum and count of alpha values
-    //   at rows where the horizontal neighbourhood (x-1, x, x+1) has any alpha.
-    // _rowBndSum[y] / _rowBndCount[y]: same for horizontal boundary rows.
-    // This lets boundaryAlpha() query any boundary in O(1) instead of O(height/width).
-    _colBndSum = new Float64Array(_width);
-    _colBndCount = new Int32Array(_width);
-    _rowBndSum = new Float64Array(_height);
-    _rowBndCount = new Int32Array(_height);
-    for (let y = 0; y < _height; y++) {
-      const rowBase = y * _width;
-      for (let x = 0; x < _width; x++) {
-        const a  = _pixels[(rowBase + x) * 4 + 3];
-        const al = x > 0          ? _pixels[(rowBase + x - 1) * 4 + 3] : 0;
-        const ar = x < _width - 1 ? _pixels[(rowBase + x + 1) * 4 + 3] : 0;
-        if (al > 0 || a > 0 || ar > 0) { _colBndSum[x] += a; _colBndCount[x]++; }
-      }
-    }
+  // Precompute per-column and per-row boundary alpha statistics.
+  // _colBndSum[x] / _colBndCount[x]: sum and count of alpha values at column x in rows
+  //   where the horizontal neighbourhood (x-1, x, x+1) has any alpha.
+  // _rowBndSum[y] / _rowBndCount[y]: same for horizontal boundary rows.
+  // This lets boundaryAlpha() query any boundary in O(1).
+  _colBndSum = new Float64Array(_width);
+  _colBndCount = new Int32Array(_width);
+  _rowBndSum = new Float64Array(_height);
+  _rowBndCount = new Int32Array(_height);
+  for (let y = 0; y < _height; y++) {
+    const rowBase = y * _width;
     for (let x = 0; x < _width; x++) {
-      for (let y = 0; y < _height; y++) {
-        const a  = _pixels[(y * _width + x) * 4 + 3];
-        const at = y > 0           ? _pixels[((y - 1) * _width + x) * 4 + 3] : 0;
-        const ab = y < _height - 1 ? _pixels[((y + 1) * _width + x) * 4 + 3] : 0;
-        if (at > 0 || a > 0 || ab > 0) { _rowBndSum[y] += a; _rowBndCount[y]++; }
-      }
+      const a  = _pixels[(rowBase + x) * 4 + 3];
+      const al = x > 0          ? _pixels[(rowBase + x - 1) * 4 + 3] : 0;
+      const ar = x < _width - 1 ? _pixels[(rowBase + x + 1) * 4 + 3] : 0;
+      if (al > 0 || a > 0 || ar > 0) { _colBndSum[x] += a; _colBndCount[x]++; }
     }
-    const tPrecompute = performance.now();
-
-    const colC = divisors(_width, 64), rowC = divisors(_height, 64);
-    const pairCount = colC.length * rowC.length - 1;
-    console.log(
-      '[spritesheet-import worker] image ' + _width + '\u00d7' + _height + 'px | ' +
-      colC.length + ' col divisors \u00d7 ' + rowC.length + ' row divisors = ' + pairCount + ' candidates | ' +
-      'precompute ' + (tPrecompute-tDraw).toFixed(0) + 'ms'
-    );
-
-    const candidates = detectGrid();
-    const tGrid = performance.now();
-
-    const best = candidates[0];
-    const padding = detectPadding(best.cols, best.rows);
-    const tPad = performance.now();
-
-    const { blank, hashes } = classifyTiles(best.cols, best.rows);
-    const tClassify = performance.now();
-
-    console.log(
-      '[spritesheet-import worker] drawImage ' + (tDraw-t0).toFixed(0) + 'ms | ' +
-      'detectGrid ' + (tGrid-tDraw).toFixed(0) + 'ms | ' +
-      'detectPadding ' + (tPad-tGrid).toFixed(0) + 'ms | ' +
-      'classifyTiles ' + (tClassify-tPad).toFixed(0) + 'ms | ' +
-      'total ' + (tClassify-t0).toFixed(0) + 'ms'
-    );
-
-    self.postMessage({ type: 'ready', width: _width, height: _height, candidates, padding, blank, hashes });
-  } else if (type === 'classify') {
-    const { cols, rows, seq } = e.data;
-    const t0 = performance.now();
-    const { blank, hashes } = classifyTiles(cols, rows);
-    console.log('[spritesheet-import worker] classify ' + cols + '\u00d7' + rows + ' in ' + (performance.now()-t0).toFixed(0) + 'ms');
-    self.postMessage({ type: 'classified', seq, blank, hashes });
   }
-};
-`;
+  for (let x = 0; x < _width; x++) {
+    for (let y = 0; y < _height; y++) {
+      const a  = _pixels[(y * _width + x) * 4 + 3];
+      const at = y > 0           ? _pixels[((y - 1) * _width + x) * 4 + 3] : 0;
+      const ab = y < _height - 1 ? _pixels[((y + 1) * _width + x) * 4 + 3] : 0;
+      if (at > 0 || a > 0 || ab > 0) { _rowBndSum[y] += a; _rowBndCount[y]++; }
+    }
+  }
+
+  const candidates = detectGrid();
+  const best = candidates[0];
+  const padding = detectPadding(best.cols, best.rows);
+  const { blank, hashes } = classifyTiles(best.cols, best.rows);
+
+  return { width: _width, height: _height, candidates, padding, blank, hashes };
+}
+
+/**
+ * Classify a specific grid layout, reusing the pixel state from the last analyzeImage() call.
+ *
+ * @param {number} cols
+ * @param {number} rows
+ * @returns {{ blank: string[], hashes: Record<string, number> }}
+ */
+export function classifyGrid(cols, rows) {
+  return classifyTiles(cols, rows);
+}
+
