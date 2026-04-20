@@ -2,10 +2,13 @@ import SpriteSheetAnalyzer from "./SpriteSheetAnalyzer.js";
 import SpriteSheetTileGrid from "./SpriteSheetTileGrid.js";
 
 /** Zoom levels available via the + / − buttons. */
-const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
+const ZOOM_STEPS = [2, 3, 4, 6, 8, 12, 16];
 
 /** Persists the user's last chosen anchor across dialog opens. */
 let _lastAnchorIndex = 4;
+
+/** Persists the keep-open preference across dialog opens. */
+let _lastKeepOpen = false;
 
 /**
  * SpriteSheetDialog — modal dialog for configuring and confirming a sprite sheet import.
@@ -112,7 +115,7 @@ export default class SpriteSheetDialog {
     this._zoomResetBtn = Object.assign(document.createElement("button"), {
       className: "sa-ss-btn sa-ss-btn-secondary sa-ss-zoom-btn",
       textContent: "⟳",
-      title: "Reset zoom (100%)",
+      title: "Reset zoom (200%)",
     });
     // Divider between zoom and selection controls
     const zoomDivider = Object.assign(document.createElement("span"), {
@@ -126,7 +129,14 @@ export default class SpriteSheetDialog {
       className: "sa-ss-btn sa-ss-btn-secondary sa-ss-zoom-btn",
       textContent: msg("clear-all"),
     });
-    zoomBar.append(this._zoomOutBtn, this._zoomLabel, this._zoomInBtn, this._zoomResetBtn, zoomDivider, this._selectAllBtn, this._clearAllBtn);
+    const countDivider = Object.assign(document.createElement("span"), {
+      className: "sa-ss-toolbar-divider",
+    });
+    this._selectionCounter = Object.assign(document.createElement("span"), {
+      className: "sa-ss-selection-count",
+      textContent: "0 / 0",
+    });
+    zoomBar.append(this._zoomOutBtn, this._zoomLabel, this._zoomInBtn, this._zoomResetBtn, zoomDivider, this._selectAllBtn, this._clearAllBtn, this._selectionCounter);
 
     // Preview area: scrollable wrap → inner div (inline-block at zoom size) → img + canvas
     this._previewWrap = Object.assign(document.createElement("div"), {
@@ -152,15 +162,17 @@ export default class SpriteSheetDialog {
       className: "sa-ss-controls-col",
     });
 
-    // Tile size controls
-    const gridControls = Object.assign(document.createElement("div"), {
-      className: "sa-ss-grid-controls",
+    // Tile size controls: W and H side-by-side, label above each input
+    const tileSizeSection = Object.assign(document.createElement("div"), {
+      className: "sa-ss-tile-size-section",
     });
-
-    const tileWLabel = Object.assign(document.createElement("label"), {
-      className: "sa-ss-spinner-label",
+    const tileWHRow = Object.assign(document.createElement("div"), {
+      className: "sa-ss-tile-wh-row",
     });
-    tileWLabel.append(
+    const tileWField = Object.assign(document.createElement("label"), {
+      className: "sa-ss-tile-field",
+    });
+    tileWField.append(
       Object.assign(document.createElement("span"), { textContent: msg("tile-width") })
     );
     this._tileWInput = Object.assign(document.createElement("input"), {
@@ -170,12 +182,11 @@ export default class SpriteSheetDialog {
       max: "2048",
       value: "16",
     });
-    tileWLabel.append(this._tileWInput);
-
-    const tileHLabel = Object.assign(document.createElement("label"), {
-      className: "sa-ss-spinner-label",
+    tileWField.append(this._tileWInput);
+    const tileHField = Object.assign(document.createElement("label"), {
+      className: "sa-ss-tile-field",
     });
-    tileHLabel.append(
+    tileHField.append(
       Object.assign(document.createElement("span"), { textContent: msg("tile-height") })
     );
     this._tileHInput = Object.assign(document.createElement("input"), {
@@ -185,20 +196,17 @@ export default class SpriteSheetDialog {
       max: "2048",
       value: "16",
     });
-    tileHLabel.append(this._tileHInput);
+    tileHField.append(this._tileHInput);
+    tileWHRow.append(tileWField, tileHField);
 
-    // Auto-detect button
     this._autoDetectBtn = Object.assign(document.createElement("button"), {
-      className: "sa-ss-btn sa-ss-btn-secondary",
+      className: "sa-ss-btn sa-ss-btn-secondary sa-ss-full-width-btn",
       textContent: msg("auto-detect"),
     });
-
-    // Confidence message
     this._detectMsg = Object.assign(document.createElement("span"), {
       className: "sa-ss-detect-msg",
     });
-
-    gridControls.append(tileWLabel, tileHLabel, this._autoDetectBtn, this._detectMsg);
+    tileSizeSection.append(tileWHRow, this._autoDetectBtn, this._detectMsg);
 
     // Costume name
     const nameRow = Object.assign(document.createElement("div"), {
@@ -257,7 +265,7 @@ export default class SpriteSheetDialog {
     anchorRow.append(this._anchorGrid);
     this._setAnchor(this._anchorIndex);
 
-    controlsCol.append(gridControls, nameRow, replaceRow, anchorRow);
+    controlsCol.append(tileSizeSection, nameRow, replaceRow, anchorRow);
 
     // ── Body (two-column) ─────────────────────────────────────────────────────
     const body = Object.assign(document.createElement("div"), {
@@ -269,6 +277,23 @@ export default class SpriteSheetDialog {
     const footer = Object.assign(document.createElement("div"), {
       className: "sa-ss-footer",
     });
+    // Keep-open checkbox — left side of footer
+    const keepOpenLabel = Object.assign(document.createElement("label"), {
+      className: "sa-ss-keep-open-label",
+    });
+    this._keepOpenCheckbox = Object.assign(document.createElement("input"), {
+      type: "checkbox",
+      className: "sa-ss-keep-open-checkbox",
+    });
+    this._keepOpenCheckbox.checked = _lastKeepOpen;
+    this._keepOpenCheckbox.addEventListener("change", () => {
+      _lastKeepOpen = this._keepOpenCheckbox.checked;
+      this._updateCancelLabel();
+    });
+    keepOpenLabel.append(
+      this._keepOpenCheckbox,
+      Object.assign(document.createElement("span"), { textContent: msg("keep-open") })
+    );
     this._cancelBtn = Object.assign(document.createElement("button"), {
       className: "sa-ss-btn sa-ss-btn-secondary",
       textContent: msg("cancel"),
@@ -276,19 +301,22 @@ export default class SpriteSheetDialog {
     this._importBtn = Object.assign(document.createElement("button"), {
       className: "sa-ss-btn sa-ss-btn-primary",
     });
-    footer.append(this._cancelBtn, this._importBtn);
+    footer.append(keepOpenLabel, this._cancelBtn, this._importBtn);
 
     // Assemble
     this._dialog.append(title, body, footer);
     this._backdrop.append(this._dialog);
     document.body.append(this._backdrop);
 
+    // Initialise Cancel/Close label to match persisted keep-open state.
+    this._updateCancelLabel();
+
     // Wire events
     this._cancelBtn.addEventListener("click", () => this._cancel());
     this._backdrop.addEventListener("click", (e) => {
       if (e.target === this._backdrop) this._cancel();
     });
-    this._importBtn.addEventListener("click", () => this._confirm());
+    this._importBtn.addEventListener("click", () => void this._confirm());
     this._autoDetectBtn.addEventListener("click", () => this._runAutoDetect());
     this._selectAllBtn.addEventListener("click", () => this._tileGrid?.selectAll());
     this._clearAllBtn.addEventListener("click", () => this._tileGrid?.clearAll());
@@ -296,7 +324,7 @@ export default class SpriteSheetDialog {
     this._tileHInput.addEventListener("change", () => this._onGridInputChange());
     this._zoomInBtn.addEventListener("click", () => this._zoomIn());
     this._zoomOutBtn.addEventListener("click", () => this._zoomOut());
-    this._zoomResetBtn.addEventListener("click", () => this._setZoom(1));
+    this._zoomResetBtn.addEventListener("click", () => this._setZoom(2));
 
     // Middle-button pan on the preview wrap
     this._previewWrap.addEventListener("mousedown", (e) => this._onWrapMouseDown(e));
@@ -328,7 +356,8 @@ export default class SpriteSheetDialog {
         const h = this._previewWrap.clientHeight;
         const naturalW = this._analyzer.imageWidth;
         const naturalH = this._analyzer.imageHeight;
-        const zoom = naturalW * 2 <= w && naturalH * 2 <= h ? 2 : 1;
+        // Minimum zoom is ×2; go to ×4 if it fits, otherwise ×2.
+        const zoom = naturalW * 4 <= w && naturalH * 4 <= h ? 4 : 2;
         this._setZoom(zoom);
         this._runAutoDetect();
       });
@@ -538,11 +567,14 @@ export default class SpriteSheetDialog {
     if (!this._analyzer) return;
     const w = Math.round(this._analyzer.imageWidth * factor);
     const h = Math.round(this._analyzer.imageHeight * factor);
-    // Resize the canvas buffer to the display size so 1 buffer pixel = 1 CSS pixel.
-    // Grid lines stay exactly 1px and tile labels stay crisp at every zoom level.
-    // The canvas CSS size is governed by `inset: 0` + the previewInner container.
-    this._overlayCanvas.width = w;
-    this._overlayCanvas.height = h;
+    const dpr = devicePixelRatio ?? 1;
+    // Size the canvas buffer at physical-pixel resolution for crisp rendering on HiDPI screens.
+    // The explicit CSS size keeps the canvas at w × h logical pixels; the DPR scale is transparent
+    // to all drawing code (render() applies ctx.setTransform to account for it).
+    this._overlayCanvas.width = Math.round(w * dpr);
+    this._overlayCanvas.height = Math.round(h * dpr);
+    this._overlayCanvas.style.width = `${w}px`;
+    this._overlayCanvas.style.height = `${h}px`;
     this._previewImg.style.width = `${w}px`;
     this._previewImg.style.height = `${h}px`;
     this._previewInner.style.width = `${w}px`;
@@ -563,8 +595,19 @@ export default class SpriteSheetDialog {
 
   _onWrapWheel(e) {
     e.preventDefault();
+    const wrap = this._previewWrap;
+    // Capture the cursor position relative to the content before zooming.
+    const mouseX = e.clientX - wrap.getBoundingClientRect().left;
+    const mouseY = e.clientY - wrap.getBoundingClientRect().top;
+    const contentX = (wrap.scrollLeft + mouseX) / this._zoom;
+    const contentY = (wrap.scrollTop + mouseY) / this._zoom;
+
     if (e.deltaY < 0) this._zoomIn();
     else this._zoomOut();
+
+    // After zoom, scroll so the point under the cursor stays fixed.
+    wrap.scrollLeft = contentX * this._zoom - mouseX;
+    wrap.scrollTop = contentY * this._zoom - mouseY;
   }
 
   // ─── Middle-button pan ────────────────────────────────────────────────────────
@@ -605,16 +648,21 @@ export default class SpriteSheetDialog {
 
   _updateImportButton() {
     const count = this._tileGrid?.selectedCount ?? 0;
+    const total = this._tileGrid?.totalCount ?? 0;
     this._importBtn.textContent =
       count > 0
         ? this._msg("import-button", { count })
         : this._msg("no-tiles");
     this._importBtn.disabled = count === 0;
+    if (this._selectionCounter) {
+      this._selectionCounter.textContent = `${count} / ${total} selected`;
+      this._selectionCounter.title = `${count} of ${total} tiles selected`;
+    }
   }
 
   // ─── Confirm / Cancel ────────────────────────────────────────────────────────
 
-  _confirm() {
+  async _confirm() {
     if (!this._tileGrid || this._tileGrid.selectedCount === 0) return;
 
     // Convert selected set to sorted tile list (left-to-right, top-to-bottom).
@@ -637,9 +685,23 @@ export default class SpriteSheetDialog {
       replaceExisting: this._replaceCheckbox.checked,
     };
 
-    const resolve = this._resolve;
-    this._close();
-    resolve(spec);
+    await this.onImport?.(spec);
+
+    if (!this._keepOpenCheckbox.checked) {
+      const resolve = this._resolve;
+      this._close();
+      resolve(null);
+    } else {
+      // Refresh the imported-tile highlights using the latest costume list.
+      const fresh = this.getCostumes?.() ?? [];
+      this._decodeCostumes(fresh).then(() => this._updateImported());
+    }
+  }
+
+  _updateCancelLabel() {
+    this._cancelBtn.textContent = this._keepOpenCheckbox.checked
+      ? this._msg("close")
+      : this._msg("cancel");
   }
 
   _cancel() {

@@ -89,7 +89,7 @@ export default class SpriteSheetImporter {
 
       const arrayBuffer = await this._extractTile(img, col, row, tileW, tileH);
 
-      // Build the VM costume asset (mirrors createVMAsset in scratch-gui/file-uploader.js).
+      // Build the VM costume object (mirrors createVMAsset in scratch-gui/file-uploader.js).
       // scratch-storage computes the content MD5 as assetId when generateId = true.
       const dataFormat = storage.DataFormat.PNG;
       const asset = storage.createAsset(
@@ -99,6 +99,17 @@ export default class SpriteSheetImporter {
         null,
         true // generate md5 from content
       );
+      const vmCostume = {
+        name: costumeName,
+        dataFormat,
+        asset,
+        md5: `${asset.assetId}.${dataFormat}`,
+        assetId: asset.assetId,
+        rotationCenterX: rotCenterX,
+        rotationCenterY: rotCenterY,
+        bitmapResolution: 1,
+        skinId: null,
+      };
 
       // Check for existing costume with the same name.
       const existingIndex = target.sprite.costumes_.findIndex(
@@ -111,24 +122,31 @@ export default class SpriteSheetImporter {
           onProgress?.(i + 1, tiles.length);
           continue;
         }
-        // Replace: remove old costume first, then fall through to add new one.
-        target.sprite.deleteCostumeAt(existingIndex);
-        if (target.currentCostume >= existingIndex) {
-          target.currentCostume = Math.max(0, target.currentCostume - 1);
-        }
-      }
 
-      const vmCostume = {
-        name: costumeName,
-        dataFormat,
-        asset,
-        md5: `${asset.assetId}.${dataFormat}`,
-        assetId: asset.assetId,
-        rotationCenterX: rotCenterX,
-        rotationCenterY: rotCenterY,
-        bitmapResolution: 1,
-        skinId: null,
-      };
+        // Replace in-place: delete the old entry first (freeing its name), add
+        // the new one via the official vm.addCostume path (which loads the skin
+        // and appends at the end), then splice it back to the original index.
+        // Deleting first means unusedName won't rename the new costume.
+        const priorCurrentCostume = target.currentCostume;
+        target.sprite.deleteCostumeAt(existingIndex);
+
+        await vm.addCostume(vmCostume.md5, vmCostume, this._targetId);
+
+        // Reposition: the costume is now fully registered (skinId set), so
+        // moving its slot in the array doesn't bypass any VM bookkeeping.
+        const costumes = target.sprite.costumes_;
+        const appendedIdx = costumes.length - 1;
+        if (appendedIdx !== existingIndex) {
+          costumes.splice(existingIndex, 0, costumes.splice(appendedIdx, 1)[0]);
+        }
+
+        // Restore the active costume. Net list length is unchanged so all
+        // indices are back to their original values after the splice.
+        target.setCostume(priorCurrentCostume);
+
+        onProgress?.(i + 1, tiles.length);
+        continue;
+      }
 
       // vm.addCostume stores the asset in storage and appends the costume.
       await vm.addCostume(vmCostume.md5, vmCostume, this._targetId);

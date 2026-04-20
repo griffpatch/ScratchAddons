@@ -87,29 +87,33 @@ export default async function ({ addon, msg, console }) {
     if (!file) return;
 
     const dialog = new SpriteSheetDialog(addon, msg);
+    dialog.getCostumes = () => Array.from(vm.editingTarget?.sprite.costumes_ ?? []);
+    dialog.onImport = async (spec) => {
+      if (!spec || spec.tiles.length === 0) return;
+
+      if (!vm.runtime.getTargetById(targetId)) {
+        console.warn("spritesheet-import: target no longer exists, aborting import");
+        return;
+      }
+
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+      URL.revokeObjectURL(img.src);
+
+      const importer = new SpriteSheetImporter(vm, targetId);
+      try {
+        await importer.import(img, spec);
+      } catch (err) {
+        console.error("spritesheet-import: import failed", err);
+      }
+    };
+
     const existingCostumes = Array.from(vm.editingTarget?.sprite.costumes_ ?? []);
-    const spec = await dialog.open(file, existingCostumes);
-    if (!spec || spec.tiles.length === 0) return;
-
-    if (!vm.runtime.getTargetById(targetId)) {
-      console.warn("spritesheet-import: target no longer exists, aborting import");
-      return;
-    }
-
-    const img = new Image();
-    img.src = URL.createObjectURL(file);
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = reject;
-    });
-    URL.revokeObjectURL(img.src);
-
-    const importer = new SpriteSheetImporter(vm, targetId);
-    try {
-      await importer.import(img, spec);
-    } catch (err) {
-      console.error("spritesheet-import: import failed", err);
-    }
+    await dialog.open(file, existingCostumes);
   }
 
   // ─── Menu injection loop ────────────────────────────────────────────────────
