@@ -24,6 +24,19 @@ export default class SpriteSheetTileGrid {
     /** Called with no args whenever selection changes. */
     this.onSelectionChange = null;
 
+    /**
+     * When true, draw a small × at the anchor point on every non-blank tile.
+     * Set anchorPoint to { x, y } in tile-local pixels before enabling.
+     */
+    this.showAnchor = false;
+    /** Anchor point in tile-local natural image pixels (fractional). */
+    this.anchorPoint = { x: 0, y: 0 };
+    /** Natural (unzoomed) tile dimensions — set by the dialog after grid detection. */
+    this.naturalTileW = 1;
+    this.naturalTileH = 1;
+    /** Symmetric padding inset in natural image pixels — used to draw the content-box rect. */
+    this.tilePadding = { left: 0, top: 0, right: 0, bottom: 0 };
+
     // Drag state: null when not dragging.
     this._drag = null; // { baseline: Set, startCol, startRow, targetState }
     this._notifyPending = false;
@@ -92,14 +105,10 @@ export default class SpriteSheetTileGrid {
 
   render() {
     const { _canvas: canvas, _ctx: ctx, _cols: cols, _rows: rows } = this;
-    // Read the CSS display size. _setZoom sets canvas.style.width/height explicitly so
-    // this is always in sync. If somehow not set, fall back to the buffer dimension (dpr = 1).
+    // CSS display size drives all drawing; DPR scale keeps strokes/badges sharp on HiDPI.
     const cssW = parseFloat(canvas.style.width) || canvas.width;
     const cssH = parseFloat(canvas.style.height) || canvas.height;
-    // Apply the DPR scale so all drawing coordinates are in logical CSS pixels, which keeps
-    // stroke widths, badge sizes, and hatch spacing consistent regardless of screen density.
-    const dpr = canvas.width / cssW;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(canvas.width / cssW, 0, 0, canvas.height / cssH, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
 
     const tileW = cssW / cols;
@@ -107,99 +116,116 @@ export default class SpriteSheetTileGrid {
 
     for (let r = 1; r <= rows; r++) {
       for (let c = 1; c <= cols; c++) {
-        const x = (c - 1) * tileW;
-        const y = (r - 1) * tileH;
         const key = `${c}:${r}`;
-        if (this._blank.has(key)) {
-          this._renderBlankTile(ctx, x, y, tileW, tileH);
-        } else {
-          this._renderContentTile(ctx, x, y, tileW, tileH, this._selected.has(key), this._imported.has(key));
-        }
+        const x = (c - 1) * tileW, y = (r - 1) * tileH;
+        if (this._blank.has(key)) this._renderBlankTile(ctx, x, y, tileW, tileH);
+        else this._renderContentTile(ctx, x, y, tileW, tileH, this._selected.has(key), this._imported.has(key));
       }
     }
+
+    // Anchor overlay drawn last so it sits on top of all tile fills and badges.
+    if (this.showAnchor) this._renderAnchorPoints(ctx, cols, rows, tileW, tileH);
   }
 
-  /** Draw a hatched overlay for a blank (fully-transparent) tile. */
+  /** Call fn(x, y) for the top-left corner of every non-blank tile. */
+  _forTiles(cols, rows, tileW, tileH, fn) {
+    for (let r = 1; r <= rows; r++)
+      for (let c = 1; c <= cols; c++)
+        if (!this._blank.has(`${c}:${r}`)) fn((c - 1) * tileW, (r - 1) * tileH);
+  }
+
+  /** Hatched dark overlay for fully-transparent (unselectable) tiles. */
   _renderBlankTile(ctx, x, y, w, h) {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
-    ctx.fillRect(x, y, w, h);
-
+    ctx.fillStyle = "rgba(0,0,0,0.06)"; ctx.fillRect(x, y, w, h);
     // Diagonal hatching to indicate "empty / not importable".
-    const spacing = Math.max(6, Math.min(w, h) / 4);
+    const sp = Math.max(6, Math.min(w, h) / 4);
     ctx.save();
+    ctx.strokeStyle = "rgba(140,140,140,0.35)"; ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.strokeStyle = "rgba(140, 140, 140, 0.35)";
-    ctx.lineWidth = 1;
-    for (let d = -h; d < w + h; d += spacing) {
-      ctx.moveTo(x + d, y);
-      ctx.lineTo(x + d + h, y + h);
-    }
-    ctx.stroke();
-    ctx.restore();
-
-    ctx.strokeStyle = "rgba(180, 180, 180, 0.25)";
-    ctx.lineWidth = 0.5;
-    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    for (let d = -h; d < w + h; d += sp) { ctx.moveTo(x + d, y); ctx.lineTo(x + d + h, y + h); }
+    ctx.stroke(); ctx.restore();
+    ctx.strokeStyle = "rgba(180,180,180,0.25)"; ctx.lineWidth = 0.5;
+    ctx.strokeRect(x + .5, y + .5, w - 1, h - 1);
   }
 
   /**
-   * Draw a content tile. Two independent state channels:
-   *   - Selected: blue tint + blue border + tick-in-circle badge at center.
-   *   - Imported: small green circle badge in top-right corner.
-   * Both badges can coexist so both states are always legible simultaneously.
+   * Draw a content tile with two independent state channels:
+   *   - Selected: blue tint + border + tick badge in top-left corner.
+   *   - Imported: small green dot badge in top-right corner.
+   * Badges are fixed CSS-pixel size so they don't scale with zoom.
    */
-  _renderContentTile(ctx, x, y, w, h, isSelected, isImported) {
-    // Fill — minimal dark overlay when unselected so the image shows through;
-    // blue tint when selected so the selection region is clearly visible.
-    ctx.fillStyle = isSelected ? "rgba(30, 100, 255, 0.22)" : "rgba(0, 0, 0, 0.10)";
-    ctx.fillRect(x, y, w, h);
+  _renderContentTile(ctx, x, y, w, h, sel, imp) {
+    // Tint + border vary by selection state.
+    ctx.fillStyle = sel ? "rgba(30,100,255,0.22)" : "rgba(0,0,0,0.10)"; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = sel ? "rgba(60,130,255,0.9)" : "rgba(180,180,180,0.5)";
+    ctx.lineWidth = sel ? 1.5 : 1; ctx.strokeRect(x + .5, y + .5, w - 1, h - 1);
 
-    // Border — blue when selected, faint grey otherwise.
-    ctx.strokeStyle = isSelected ? "rgba(60, 130, 255, 0.9)" : "rgba(180, 180, 180, 0.5)";
-    ctx.lineWidth = isSelected ? 1.5 : 1;
-    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-
-    const s = Math.min(w, h);
-
-    // ── Selected badge: filled circle with a white tick at the tile center ──
-    if (isSelected && s >= 10) {
-      const cx = x + w / 2;
-      const cy = y + h / 2;
-      const r = s * 0.20;
-
-      // Circle background
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(40, 120, 255, 0.9)";
-      ctx.fill();
-
-      // Tick inside the circle
-      const arm = r * 0.58;
+    // Tick badge: blue circle with white checkmark, top-left corner.
+    if (sel && w >= 20 && h >= 20) {
+      const R = 10, m = 3, cx = x + m + R, cy = y + m + R, a = R * 0.58;
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(40,120,255,0.9)"; ctx.fill();
       ctx.save();
-      ctx.strokeStyle = "white";
-      ctx.lineWidth = Math.max(1, r * 0.3);
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
+      ctx.strokeStyle = "white"; ctx.lineWidth = 2; ctx.lineCap = ctx.lineJoin = "round";
       ctx.beginPath();
-      ctx.moveTo(cx - arm * 0.62, cy + arm * 0.05);
-      ctx.lineTo(cx - arm * 0.05, cy + arm * 0.72);
-      ctx.lineTo(cx + arm * 0.78, cy - arm * 0.62);
-      ctx.stroke();
-      ctx.restore();
+      ctx.moveTo(cx - a * .62, cy + a * .05); ctx.lineTo(cx - a * .05, cy + a * .72); ctx.lineTo(cx + a * .78, cy - a * .62);
+      ctx.stroke(); ctx.restore();
     }
 
-    // ── Imported badge: small green circle in the top-right corner ──
-    if (isImported && s >= 8) {
-      const dotR = Math.max(2, s * 0.14);
-      const margin = dotR + 1.5;
-      ctx.beginPath();
-      ctx.arc(x + w - margin, y + margin, dotR, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(0, 200, 85, 0.95)";
-      ctx.fill();
+    // Imported badge: small green dot, top-right corner.
+    if (imp && w >= 8 && h >= 8) {
+      const r = 3;
+      ctx.beginPath(); ctx.arc(x + w - r - 1.5, y + r + 1.5, r, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,200,85,0.95)"; ctx.fill();
     }
   }
 
-  // ─── Mouse handling ─────────────────────────────────────────────────────────
+  /**
+   * Draw the anchor overlay on every non-blank tile:
+   *   1. Dashed content-box rect showing the transparent padding inset.
+   *   2. Scratch-style crosshair (circle + four arms) at the anchor point.
+   * Both use a two-pass technique (dark outline then coloured stroke) so they
+   * remain legible against any sprite background colour.
+   * All sizes are in fixed CSS pixels so they don't scale with zoom.
+   */
+  _renderAnchorPoints(ctx, cols, rows, tileW, tileH) {
+    // Convert anchor from natural image pixels to CSS (zoomed) pixels.
+    const ax = (this.anchorPoint.x / this.naturalTileW) * tileW;
+    const ay = (this.anchorPoint.y / this.naturalTileH) * tileH;
+
+    // Padding content-box rect — only drawn when padding is non-zero.
+    const { left: pl, top: pt, right: pr, bottom: pb } = this.tilePadding;
+    if (pl || pt || pr || pb) {
+      const lx = (pl / this.naturalTileW) * tileW, ty = (pt / this.naturalTileH) * tileH;
+      const bw = tileW - lx - (pr / this.naturalTileW) * tileW;
+      const bh = tileH - ty - (pb / this.naturalTileH) * tileH;
+      for (const [color, lw, dash] of [["rgba(0,0,0,0.5)", 3, []], ["rgba(255,255,255,0.9)", 1, [4, 3]]]) {
+        ctx.save();
+        ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.setLineDash(dash);
+        this._forTiles(cols, rows, tileW, tileH, (x, y) => ctx.strokeRect(x + lx + .5, y + ty + .5, bw - 1, bh - 1));
+        ctx.restore();
+      }
+    }
+
+    // Scratch-style crosshair: circle (R=5) with four arms (length=5, gap=2 from circle edge).
+    const R = 5, gap = 2, arm = 5;
+    const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]]; // top, bottom, left, right
+    for (const [color, lw] of [["rgba(0,0,0,0.6)", 3.5], ["rgba(255,220,0,1)", 1.5]]) {
+      ctx.save();
+      ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = "round";
+      this._forTiles(cols, rows, tileW, tileH, (x, y) => {
+        const ox = x + ax, oy = y + ay;
+        ctx.beginPath(); ctx.arc(ox, oy, R, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath();
+        for (const [dx, dy] of dirs) {
+          ctx.moveTo(ox + dx * (R + gap), oy + dy * (R + gap));
+          ctx.lineTo(ox + dx * (R + gap + arm), oy + dy * (R + gap + arm));
+        }
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
+  }
 
   /** Convert client coordinates to 1-based {col, row}. */
   _tileAt(clientX, clientY) {

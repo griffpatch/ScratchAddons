@@ -203,6 +203,83 @@ export default class SpriteSheetAnalyzer {
   }
 
   /**
+   * Detect the predominant transparent inner margin across all non-blank tiles.
+   * Scans the transparent border on each side of every non-blank tile, then
+   * takes the median per side. Outlier frames that bleed to the edge lower the
+   * median slightly but don't collapse it, so a few "large" frames don't ruin
+   * the result for the majority.
+   *
+   * @param {number} cols
+   * @param {number} rows
+   * @returns {{ left: number, top: number, right: number, bottom: number }}
+   */
+  detectPadding(cols, rows) {
+    const tileW = Math.floor(this._width / cols);
+    const tileH = Math.floor(this._height / rows);
+
+    const lefts = [], tops = [], rights = [], bottoms = [];
+
+    for (let r = 1; r <= rows; r++) {
+      for (let c = 1; c <= cols; c++) {
+        const imageData = this.getTileImageData(c, r, cols, rows);
+        if (this.isTileBlank(imageData)) continue;
+
+        const { data } = imageData;
+        const W = imageData.width;
+        const H = imageData.height;
+
+        // Find transparent border on each side.
+        let left = W, top = H, right = W, bottom = H;
+
+        // Left: scan columns left-to-right until a non-transparent pixel
+        outer: for (let x = 0; x < W; x++) {
+          for (let y = 0; y < H; y++) {
+            if (data[(y * W + x) * 4 + 3] > 0) { left = x; break outer; }
+          }
+        }
+        // Right: scan columns right-to-left
+        outer: for (let x = W - 1; x >= 0; x--) {
+          for (let y = 0; y < H; y++) {
+            if (data[(y * W + x) * 4 + 3] > 0) { right = W - 1 - x; break outer; }
+          }
+        }
+        // Top: scan rows top-to-bottom
+        outer: for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            if (data[(y * W + x) * 4 + 3] > 0) { top = y; break outer; }
+          }
+        }
+        // Bottom: scan rows bottom-to-top
+        outer: for (let y = H - 1; y >= 0; y--) {
+          for (let x = 0; x < W; x++) {
+            if (data[(y * W + x) * 4 + 3] > 0) { bottom = H - 1 - y; break outer; }
+          }
+        }
+
+        lefts.push(left);
+        tops.push(top);
+        rights.push(right);
+        bottoms.push(bottom);
+      }
+    }
+
+    if (lefts.length === 0) return { left: 0, top: 0, right: 0, bottom: 0 };
+
+    const median = (arr) => {
+      const s = [...arr].sort((a, b) => a - b);
+      const m = Math.floor(s.length / 2);
+      return s.length % 2 === 1 ? s[m] : Math.floor((s[m - 1] + s[m]) / 2);
+    };
+
+    return {
+      left: median(lefts),
+      top: median(tops),
+      right: median(rights),
+      bottom: median(bottoms),
+    };
+  }
+
+  /**
    * Fast djb2-based hash over raw pixel bytes. Used to detect identical tile content.
    *
    * @param {ImageData} imageData

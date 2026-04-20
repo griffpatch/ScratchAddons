@@ -5,18 +5,14 @@ export default async function ({ addon, msg, console }) {
   const vm = addon.tab.traps.vm;
 
   /**
-   * Create the menu-item wrapper (button + hidden file input) for one menu.
+   * Create the menu-item wrapper (button + tooltip) for the costume-tab action menu.
    *
-   * @param {string} id - Unique ID for this menu instance.
-   * @param {boolean} isRight - True when the menu is on the right side (tooltip placement).
-   * @returns {{ wrapper: Element, button: Element, input: HTMLInputElement }}
+   * @returns {{ wrapper: Element, button: Element, input: HTMLInputElement, tooltip: Element }}
    */
-  function createMenuItem(id, isRight) {
+  function createMenuItem() {
     const labelText = msg("menu-item");
 
-    const wrapper = Object.assign(document.createElement("div"), {
-      id: `sa-ss-wrap-${id}`,
-    });
+    const wrapper = document.createElement("div");
 
     const button = Object.assign(document.createElement("button"), {
       className: [
@@ -26,8 +22,6 @@ export default async function ({ addon, msg, console }) {
       ].join(" "),
       currentitem: "false",
     });
-    button.dataset.for = `sa-ss-tip-${id}`;
-    button.dataset.tip = labelText;
 
     const icon = Object.assign(document.createElement("img"), {
       className: addon.tab.scratchClass("action-menu_more-icon"),
@@ -45,36 +39,27 @@ export default async function ({ addon, msg, console }) {
     });
     button.append(input);
 
-    // Tooltip element (mirrors better-img-uploads pattern)
     const tooltip = Object.assign(document.createElement("div"), {
       className: [
         "__react_component_tooltip",
-        `place-${isRight ? "left" : "right"}`,
+        "place-right",
         "type-dark",
         addon.tab.scratchClass("action-menu_tooltip"),
         "sa-ss-tooltip",
       ].join(" "),
-      id: `sa-ss-tip-${id}`,
       textContent: labelText,
     });
-    tooltip.dataset.id = "tooltip";
 
     wrapper.append(button, tooltip);
     addon.tab.displayNoneWhileDisabled(wrapper);
     return { wrapper, button, input, tooltip };
   }
 
-  /** Position the tooltip alongside its button (called on menu resize). */
-  function positionTooltip(wrapper, tooltip, isRight) {
+  /** Position the tooltip to the right of its wrapper button (called on menu resize). */
+  function positionTooltip(wrapper, tooltip) {
     const rect = wrapper.getBoundingClientRect();
     tooltip.style.top = `${rect.top + 2}px`;
-    if (isRight) {
-      tooltip.style.right = `${window.innerWidth - rect.right + rect.width + 10}px`;
-      tooltip.style.left = "";
-    } else {
-      tooltip.style.left = `${rect.left + rect.width}px`;
-      tooltip.style.right = "";
-    }
+    tooltip.style.left = `${rect.left + rect.width}px`;
   }
 
   /**
@@ -136,13 +121,7 @@ export default async function ({ addon, msg, console }) {
       ],
     });
 
-    // Derive a stable ID from the main button's aria-label.
-    const mainButton =
-      menu.parentElement.previousElementSibling.previousElementSibling;
-    const id = (mainButton.getAttribute("aria-label") ?? "costume").replace(/\s+/g, "_");
-    const isRight = false; // Costume tab menu is on the left side of the screen.
-
-    const { wrapper, button, input, tooltip } = createMenuItem(id, isRight);
+    const { wrapper, button, input, tooltip } = createMenuItem();
     menu.prepend(wrapper);
 
     button.addEventListener("click", (e) => {
@@ -160,9 +139,8 @@ export default async function ({ addon, msg, console }) {
     });
 
     // Keep tooltip positioned correctly as menu opens/closes/resizes.
-    const observer = new MutationObserver(() =>
-      positionTooltip(wrapper, tooltip, isRight)
-    );
+    const observer = new MutationObserver(() => positionTooltip(wrapper, tooltip));
     observer.observe(menu, { attributes: true, subtree: true });
+    positionTooltip(wrapper, tooltip);
   }
 }

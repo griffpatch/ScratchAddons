@@ -8,6 +8,11 @@
  *   0=top-left  1=top-center  2=top-right
  *   3=mid-left  4=center      5=mid-right
  *   6=bot-left  7=bot-center  8=bot-right
+ *
+ * Padding: transparent inner margin (in pixels) that shifts the anchor point
+ * inward from the raw cell edge, so "bottom-center" maps to the base of the
+ * visible content rather than the cell boundary. The full tile cell is still
+ * imported — padding only affects where the rotation center is placed.
  */
 export default class SpriteSheetImporter {
   /**
@@ -24,19 +29,34 @@ export default class SpriteSheetImporter {
   }
 
   /**
-   * Compute rotationCenter from anchor index and tile dimensions.
+   * Compute rotationCenter from anchor index, tile dimensions, and optional padding.
+   *
+   * The anchor maps to the inner content box defined by the padding insets.
+   * For example, with tileW=32, padding.left=4, padding.right=4, anchorIndex=7
+   * (bottom-center): contentX = 4 + (32-4-4)/2 = 16, contentY = 32-4 = 28.
    *
    * @param {number} anchorIndex - 0–8
    * @param {number} tileW - tile width in pixels
    * @param {number} tileH - tile height in pixels
+   * @param {{ left?: number, top?: number, right?: number, bottom?: number }} [padding]
    * @returns {{ x: number, y: number }}
    */
-  static anchorToCenter(anchorIndex, tileW, tileH) {
+  static anchorToCenter(anchorIndex, tileW, tileH, padding = {}) {
+    const pl = padding.left ?? 0;
+    const pt = padding.top ?? 0;
+    const pr = padding.right ?? 0;
+    const pb = padding.bottom ?? 0;
+
     const col = anchorIndex % 3; // 0=left, 1=center, 2=right
     const row = Math.floor(anchorIndex / 3); // 0=top, 1=mid, 2=bot
+
+    // Content box origin and size after padding inset
+    const contentW = tileW - pl - pr;
+    const contentH = tileH - pt - pb;
+
     return {
-      x: (col / 2) * tileW,
-      y: (row / 2) * tileH,
+      x: pl + (col / 2) * contentW,
+      y: pt + (row / 2) * contentH,
     };
   }
 
@@ -50,9 +70,11 @@ export default class SpriteSheetImporter {
    * @param {number} spec.rows - Total rows in the grid.
    * @param {string} spec.baseName - Costume name prefix.
    * @param {number} spec.anchorIndex - 0–8 anchor position.
+   * @param {{ left?: number, top?: number, right?: number, bottom?: number }} [spec.padding]
+   *   Transparent inner margin used to offset the anchor into the content area.
    * @param {Function} [spec.onProgress] - Called with (imported, total) after each tile.
    */
-  async import(img, { tiles, cols, rows, baseName, anchorIndex, replaceExisting = false, onProgress }) {
+  async import(img, { tiles, cols, rows, baseName, anchorIndex, padding = {}, replaceExisting = false, onProgress }) {
     const storage = this._storage;
     const vm = this._vm;
 
@@ -61,7 +83,8 @@ export default class SpriteSheetImporter {
     const { x: rotCenterX, y: rotCenterY } = SpriteSheetImporter.anchorToCenter(
       anchorIndex,
       tileW,
-      tileH
+      tileH,
+      padding
     );
 
     this._tileCanvas.width = tileW;
@@ -73,12 +96,21 @@ export default class SpriteSheetImporter {
     // Remove all existing costumes with this base name prefix before importing.
     if (replaceExisting) {
       const prefix = `${baseName}:`;
+      let deletedAny = false;
       for (let i = target.sprite.costumes_.length - 1; i >= 0; i--) {
         if (target.sprite.costumes_[i].name.startsWith(prefix)) {
-          // target.deleteCostume handles currentCostume adjustment,
-          // requestTargetsUpdate, and the "can't delete last costume" guard.
-          target.deleteCostume(i);
+          if (target.sprite.costumes_.length === 1) break; // keep last costume
+          target.sprite.deleteCostumeAt(i);
+          if (target.currentCostume >= i) {
+            target.currentCostume = Math.max(0, target.currentCostume - 1);
+          }
+          deletedAny = true;
         }
+      }
+      // Emit one update for all deletions rather than one per costume.
+      if (deletedAny) {
+        target.setCostume(target.currentCostume);
+        target.runtime.requestTargetsUpdate(target);
       }
     }
 
