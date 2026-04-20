@@ -322,6 +322,7 @@ export default class SpriteSheetDialog {
     this._clearAllBtn.addEventListener("click", () => this._tileGrid?.clearAll());
     this._tileWInput.addEventListener("change", () => this._onGridInputChange());
     this._tileHInput.addEventListener("change", () => this._onGridInputChange());
+    this._replaceCheckbox.addEventListener("change", () => this._updateImportButton());
     this._zoomInBtn.addEventListener("click", () => this._zoomIn());
     this._zoomOutBtn.addEventListener("click", () => this._zoomOut());
     this._zoomResetBtn.addEventListener("click", () => this._setZoom(2));
@@ -450,17 +451,13 @@ export default class SpriteSheetDialog {
    * @param {object[]} costumes - VM costume objects.
    */
   async _decodeCostumes(costumes) {
-    console.log(`[spritesheet] _decodeCostumes: ${costumes.length} costumes`);
     const hashes = new Set();
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
     for (const costume of costumes) {
       const bytes = costume.asset?.data;
-      if (!bytes) {
-        console.log(`[spritesheet]   skip "${costume.name}": no asset.data (dataFormat=${costume.dataFormat})`);
-        continue;
-      }
+      if (!bytes) continue;
       try {
         const mime = costume.dataFormat === "svg" ? "image/svg+xml" : "image/png";
         const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
@@ -478,18 +475,12 @@ export default class SpriteSheetDialog {
         ctx.drawImage(bitmap, 0, 0, bw, bh, 0, 0, compareW, compareH);
         bitmap.close();
         const imageData = ctx.getImageData(0, 0, compareW, compareH);
-        const h = SpriteSheetAnalyzer.hashImageData(imageData);
-        console.log(
-          `[spritesheet]   costume "${costume.name}"  stored=${bw}x${bh}  logical=${compareW}x${compareH}` +
-          `  bitmapResolution=${res}  hash=${h}`
-        );
-        hashes.add(h);
-      } catch (err) {
-        console.warn(`[spritesheet]   skip "${costume.name}": decode failed`, err);
+        hashes.add(SpriteSheetAnalyzer.hashImageData(imageData));
+      } catch {
+        // skip undecoded costumes silently
       }
     }
 
-    console.log(`[spritesheet] _decodeCostumes done: ${hashes.size} hashes`, [...hashes]);
     this._costumeHashes = hashes;
   }
 
@@ -503,19 +494,8 @@ export default class SpriteSheetDialog {
    * @returns {Set<string>}
    */
   _computeImported(cols = this._cols, rows = this._rows) {
-    if (!this._costumeHashes || !this._analyzer) {
-      console.log(`[spritesheet] _computeImported: skipped (hashes=${this._costumeHashes === null ? 'null' : 'pending'}, analyzer=${!!this._analyzer})`);
-      return new Set();
-    }
+    if (!this._costumeHashes || !this._analyzer) return new Set();
     const imported = new Set();
-    // Log tile 1:1 detail only
-    const tileData11 = this._analyzer.getTileImageData(1, 1, cols, rows);
-    const hash11 = SpriteSheetAnalyzer.hashImageData(tileData11);
-    console.log(
-      `[spritesheet] tile 1:1  size=${tileData11.width}x${tileData11.height}  hash=${hash11}` +
-      `  match=${this._costumeHashes.has(hash11)}`
-    );
-
     for (let r = 1; r <= rows; r++) {
       for (let c = 1; c <= cols; c++) {
         const tileData = this._analyzer.getTileImageData(c, r, cols, rows);
@@ -523,7 +503,6 @@ export default class SpriteSheetDialog {
         if (this._costumeHashes.has(h)) imported.add(`${c}:${r}`);
       }
     }
-    console.log(`[spritesheet] _computeImported: ${imported.size} matched of ${cols * rows} tiles`);
     return imported;
   }
 
@@ -649,11 +628,20 @@ export default class SpriteSheetDialog {
   _updateImportButton() {
     const count = this._tileGrid?.selectedCount ?? 0;
     const total = this._tileGrid?.totalCount ?? 0;
-    this._importBtn.textContent =
-      count > 0
-        ? this._msg("import-button", { count })
-        : this._msg("no-tiles");
-    this._importBtn.disabled = count === 0;
+    const replacing = this._replaceCheckbox?.checked ?? false;
+    if (replacing) {
+      this._importBtn.textContent =
+        count > 0
+          ? this._msg("replace-button", { count })
+          : this._msg("remove-all");
+      this._importBtn.disabled = false;
+    } else {
+      this._importBtn.textContent =
+        count > 0
+          ? this._msg("import-button", { count })
+          : this._msg("no-tiles");
+      this._importBtn.disabled = count === 0;
+    }
     if (this._selectionCounter) {
       this._selectionCounter.textContent = `${count} / ${total} selected`;
       this._selectionCounter.title = `${count} of ${total} tiles selected`;
@@ -663,7 +651,8 @@ export default class SpriteSheetDialog {
   // ─── Confirm / Cancel ────────────────────────────────────────────────────────
 
   async _confirm() {
-    if (!this._tileGrid || this._tileGrid.selectedCount === 0) return;
+    const replacing = this._replaceCheckbox.checked;
+    if (!this._tileGrid || (this._tileGrid.selectedCount === 0 && !replacing)) return;
 
     // Convert selected set to sorted tile list (left-to-right, top-to-bottom).
     const selected = this._tileGrid.getSelectedSet();

@@ -16,6 +16,8 @@
   "spritesheet-import/close": "Close",
   "spritesheet-import/cancel": "Cancel",
   "spritesheet-import/import-button": "Import {count} costume(s)",
+  "spritesheet-import/replace-button": "Replace with {count} costume(s)",
+  "spritesheet-import/remove-all": "Remove all",
   "spritesheet-import/importing": "Importing\u2026",
   "spritesheet-import/no-tiles": "No tiles selected"
 }

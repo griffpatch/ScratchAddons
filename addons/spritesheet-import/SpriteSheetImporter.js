@@ -75,10 +75,9 @@ export default class SpriteSheetImporter {
       const prefix = `${baseName}:`;
       for (let i = target.sprite.costumes_.length - 1; i >= 0; i--) {
         if (target.sprite.costumes_[i].name.startsWith(prefix)) {
-          if (target.currentCostume >= i) {
-            target.currentCostume = Math.max(0, target.currentCostume - 1);
-          }
-          target.sprite.deleteCostumeAt(i);
+          // target.deleteCostume handles currentCostume adjustment,
+          // requestTargetsUpdate, and the "can't delete last costume" guard.
+          target.deleteCostume(i);
         }
       }
     }
