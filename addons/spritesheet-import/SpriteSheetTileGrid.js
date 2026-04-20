@@ -83,16 +83,27 @@ export default class SpriteSheetTileGrid {
     return this._selected.size;
   }
 
+  /** Total non-blank (importable) tile count. */
+  get totalCount() {
+    return this._cols * this._rows - this._blank.size;
+  }
+
   // ─── Rendering ─────────────────────────────────────────────────────────────
 
   render() {
     const { _canvas: canvas, _ctx: ctx, _cols: cols, _rows: rows } = this;
-    const w = canvas.width;
-    const h = canvas.height;
-    const tileW = w / cols;
-    const tileH = h / rows;
+    // Read the CSS display size. _setZoom sets canvas.style.width/height explicitly so
+    // this is always in sync. If somehow not set, fall back to the buffer dimension (dpr = 1).
+    const cssW = parseFloat(canvas.style.width) || canvas.width;
+    const cssH = parseFloat(canvas.style.height) || canvas.height;
+    // Apply the DPR scale so all drawing coordinates are in logical CSS pixels, which keeps
+    // stroke widths, badge sizes, and hatch spacing consistent regardless of screen density.
+    const dpr = canvas.width / cssW;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
 
-    ctx.clearRect(0, 0, w, h);
+    const tileW = cssW / cols;
+    const tileH = cssH / rows;
 
     for (let r = 1; r <= rows; r++) {
       for (let c = 1; c <= cols; c++) {
@@ -131,44 +142,60 @@ export default class SpriteSheetTileGrid {
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
   }
 
-  /** Draw a selected or unselected content tile. Imported tiles (already in sprite) are green. */
+  /**
+   * Draw a content tile. Two independent state channels:
+   *   - Selected: blue tint + blue border + tick-in-circle badge at center.
+   *   - Imported: small green circle badge in top-right corner.
+   * Both badges can coexist so both states are always legible simultaneously.
+   */
   _renderContentTile(ctx, x, y, w, h, isSelected, isImported) {
-    // Fill — imported tiles always show green tint; selection adds blue on top
-    if (isImported) {
-      ctx.fillStyle = isSelected ? "rgba(0, 160, 80, 0.32)" : "rgba(0, 160, 80, 0.14)";
-    } else {
-      ctx.fillStyle = isSelected ? "rgba(0, 100, 255, 0.25)" : "rgba(0, 0, 0, 0.35)";
-    }
+    // Fill — minimal dark overlay when unselected so the image shows through;
+    // blue tint when selected so the selection region is clearly visible.
+    ctx.fillStyle = isSelected ? "rgba(30, 100, 255, 0.22)" : "rgba(0, 0, 0, 0.10)";
     ctx.fillRect(x, y, w, h);
 
-    // Border — imported tiles always get green border regardless of selection
-    if (isImported) {
-      ctx.strokeStyle = isSelected ? "rgba(0, 210, 100, 0.95)" : "rgba(0, 180, 90, 0.85)";
-      ctx.lineWidth = isSelected ? 1.5 : 1.5;
-    } else {
-      ctx.strokeStyle = isSelected ? "rgba(0, 100, 255, 0.9)" : "rgba(180, 180, 180, 0.6)";
-      ctx.lineWidth = 1;
-    }
+    // Border — blue when selected, faint grey otherwise.
+    ctx.strokeStyle = isSelected ? "rgba(60, 130, 255, 0.9)" : "rgba(180, 180, 180, 0.5)";
+    ctx.lineWidth = isSelected ? 1.5 : 1;
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
-    // Checkmark icon for selected tiles (drawn as path, not text, for crispness)
-    if (isSelected && w >= 10 && h >= 10) {
-      const s = Math.min(w, h);
+    const s = Math.min(w, h);
+
+    // ── Selected badge: filled circle with a white tick at the tile center ──
+    if (isSelected && s >= 10) {
       const cx = x + w / 2;
       const cy = y + h / 2;
-      // Scale checkmark to ~50% of tile dimension
-      const arm = s * 0.22;
+      const r = s * 0.20;
+
+      // Circle background
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(40, 120, 255, 0.9)";
+      ctx.fill();
+
+      // Tick inside the circle
+      const arm = r * 0.58;
       ctx.save();
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
-      ctx.lineWidth = Math.max(1, s * 0.085);
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = Math.max(1, r * 0.3);
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.beginPath();
-      ctx.moveTo(cx - arm, cy);
-      ctx.lineTo(cx - arm * 0.1, cy + arm * 0.85);
-      ctx.lineTo(cx + arm * 1.1, cy - arm * 0.85);
+      ctx.moveTo(cx - arm * 0.62, cy + arm * 0.05);
+      ctx.lineTo(cx - arm * 0.05, cy + arm * 0.72);
+      ctx.lineTo(cx + arm * 0.78, cy - arm * 0.62);
       ctx.stroke();
       ctx.restore();
+    }
+
+    // ── Imported badge: small green circle in the top-right corner ──
+    if (isImported && s >= 8) {
+      const dotR = Math.max(2, s * 0.14);
+      const margin = dotR + 1.5;
+      ctx.beginPath();
+      ctx.arc(x + w - margin, y + margin, dotR, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0, 200, 85, 0.95)";
+      ctx.fill();
     }
   }
 

@@ -114,10 +114,10 @@
 }
 
 /*
- * The canvas buffer dimensions equal the natural image size; only the CSS
- * display dimensions change with zoom. getBoundingClientRect() on the canvas
- * therefore reflects the zoom, so _tileAt() coordinate mapping is correct
- * at every zoom level without any extra math.
+ * The canvas buffer is sized at logical-pixel dimensions × devicePixelRatio for crisp
+ * HiDPI rendering. The CSS display dimensions (set via canvas.style.width/height) match
+ * the zoomed image size. getBoundingClientRect() on the canvas therefore reflects the zoom,
+ * so _tileAt() coordinate mapping is correct at every zoom level without any extra math.
  */
 .sa-ss-overlay {
   cursor: crosshair;
@@ -132,31 +132,69 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  gap: 12px;
+  gap: 18px;
+  overflow-x: hidden;
   overflow-y: auto;
+  /* Push the panel down to align with the top of the preview image (below the zoom bar). */
+  padding-top: 32px;
   width: 220px;
 }
 
-/* ─── Controls rows ──────────────────────────────────────────────────────── */
+/* ─── Selection count (plain text in toolbar) ───────────────────────────── */
 
-.sa-ss-grid-controls {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.sa-ss-selection-count {
+  color: var(--text-primary, #575e75);
+  font-size: 0.8rem;
+  margin-left: 4px;
+  opacity: 0.75;
+  white-space: nowrap;
 }
-.sa-ss-spinner-label {
-  align-items: center;
+
+/* ─── Shared field label style ───────────────────────────────────────────── */
+
+.sa-ss-field-label {
+  color: var(--text-primary, #575e75);
+  display: block;
+  font-size: 0.8rem;
+  margin-bottom: 3px;
+}
+
+/* ─── Tile size section ──────────────────────────────────────────────────── */
+
+.sa-ss-tile-size-section {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sa-ss-tile-wh-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.sa-ss-tile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sa-ss-tile-field > span {
+  color: var(--text-primary, #575e75);
+  font-size: 0.8rem;
 }
 
 .sa-ss-spinner {
   border: 1px solid var(--ui-border, #ccc);
   border-radius: 4px;
-  padding: 3px 6px;
+  box-sizing: border-box;
+  padding: 4px 6px;
   text-align: center;
-  width: 60px;
+  width: 100%;
+}
+
+.sa-ss-full-width-btn {
+  width: 100%;
 }
 
 .sa-ss-detect-msg {
@@ -191,12 +229,14 @@
 
 .sa-ss-name-label > span {
   align-self: flex-start;
-  font-size: 0.85rem;
+  color: var(--text-primary, #575e75);
+  font-size: 0.8rem;
 }
 
 .sa-ss-name-input {
   border: 1px solid var(--ui-border, #ccc);
   border-radius: 4px;
+  box-sizing: border-box;
   padding: 4px 8px;
   width: 100%;
 }
@@ -221,7 +261,8 @@
 }
 
 .sa-ss-anchor-label {
-  font-size: 0.85rem;
+  color: var(--text-primary, #575e75);
+  font-size: 0.8rem;
 }
 
 .sa-ss-anchor-grid {
@@ -257,12 +298,22 @@
 /* ─── Footer ─────────────────────────────────────────────────────────────── */
 
 .sa-ss-footer {
+  align-items: center;
   border-top: 1px solid var(--ui-border, #e0e0e0);
   display: flex;
   flex-shrink: 0;
   gap: 8px;
-  justify-content: flex-end;
   padding-top: 12px;
+}
+
+.sa-ss-keep-open-label {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: 0.85rem;
+  gap: 6px;
+  /* Push Cancel / Import to the right */
+  margin-right: auto;
 }
 
 /* ─── Buttons ────────────────────────────────────────────────────────────── */
