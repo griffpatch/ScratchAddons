@@ -10,7 +10,7 @@
   "spritesheet-import/select-all": "Select All",
   "spritesheet-import/clear-all": "Clear All",
   "spritesheet-import/name-label": "Costume name",
-  "spritesheet-import/replace-existing": "Replace previous import",
+  "spritesheet-import/replace-existing": "Replace all",
   "spritesheet-import/anchor-label": "Anchor",
   "spritesheet-import/cancel": "Cancel",
   "spritesheet-import/import-button": "Import {count} costume(s)",
