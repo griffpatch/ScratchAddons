@@ -40,7 +40,7 @@ function divisors(n, max) {
   return d;
 }
 
-// ─── Grid detection (mirrors SpriteSheetAnalyzer.detectGrid logic) ────────────
+// ─── Grid detection ──────────────────────────────────────────────────────────
 
 // boundaryAlpha uses precomputed _colBndSum/_rowBndSum arrays (O(1) per boundary)
 // instead of calling getImageData per strip. Precomputed in the init handler.

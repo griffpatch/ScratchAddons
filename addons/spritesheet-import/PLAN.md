@@ -135,7 +135,7 @@ addons/spritesheet-import/
   icon.svg                  — Menu button icon
   userscript.js             — Entry point; injects menu item
   userstyle.css             — Dialog & button styles
-  SpriteSheetAnalyzer.js    — Grid auto-detection, blank detection, tile hash
+  SpriteSheetWorker.js      — Grid auto-detection, blank detection, tile hash (Web Worker)
   SpriteSheetTileGrid.js    — Canvas tile-grid overlay, click/drag selection
   SpriteSheetDialog.js      — Modal dialog DOM + state management
   SpriteSheetImporter.js    — Costume creation & VM interaction
@@ -145,14 +145,13 @@ addons/spritesheet-import/
 
 ## Class responsibilities
 
-### `SpriteSheetAnalyzer`
+### `SpriteSheetWorker` (Blob Web Worker)
 
-```
-detectGrid(imageData)           → { cols, rows, confidence }[]  (ranked)
-getTileImageData(img, col, row, cols, rows)  → ImageData
-isTileBlank(imageData)          → boolean
-hashImageData(imageData)        → string   (fast djb2 over pixel bytes)
-```
+Runs off the main thread. Receives an `ImageBitmap` (transferred zero-copy),
+precomputes per-column/row boundary sums, then handles two messages:
+
+- `init` → `ready`: detectGrid → detectPadding → classifyTiles → post results
+- `classify` → `classified`: reclassify with new cols/rows → post blank set + hashes
 
 ### `SpriteSheetTileGrid`
 
@@ -239,7 +238,7 @@ None required for v1 (all options are per-import in the dialog).
 1. **Scaffold**: `addon.json`, register in `addons.json`, `icon.svg`, i18n file.
 2. **`userscript.js`**: inject menu item (mirror `better-img-uploads` pattern),
    wire file-picker click → open dialog.
-3. **`SpriteSheetAnalyzer`**: image analysis, blank detection, auto-detect.
+3. **`SpriteSheetWorker`**: image analysis off-thread, blank detection, auto-detect.
 4. **`SpriteSheetTileGrid`**: canvas overlay, mouse interaction.
 5. **`SpriteSheetDialog`**: full modal with all controls, wired to Analyzer + TileGrid.
 6. **`SpriteSheetImporter`**: tile extraction → `vm.addCostume`.
