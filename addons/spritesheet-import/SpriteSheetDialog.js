@@ -60,6 +60,7 @@ export default class SpriteSheetDialog {
     this._anchorIndex = _lastAnchorIndex;
     this._padding = 0;
     this._showAnchor = false;
+    this._hoverAnchor = false;
     this._zoom = 1;
     this._midDrag = null;
     /** @type {Map<string,number>|null} Tile-key → djb2 hash; null until analysis completes. */
@@ -73,13 +74,10 @@ export default class SpriteSheetDialog {
    * Open the dialog for the given image file.
    *
    * @param {File} file
-   * @returns {Promise<ImportSpec | null>}
-   *   Resolves with { tiles, cols, rows, baseName, anchorIndex, replaceExisting } or null on cancel.
-   */
-  /**
-   * @param {File} file
    * @param {object[]} [existingCostumes] - VM costume objects already on the target sprite.
    *   Used to highlight tiles whose pixel content is already imported.
+   * @returns {Promise<ImportSpec | null>}
+   *   Resolves with { tiles, cols, rows, baseName, anchorIndex, replaceExisting } or null on cancel.
    */
   open(file, existingCostumes = []) {
     this._anchorIndex = _lastAnchorIndex;
@@ -322,21 +320,16 @@ export default class SpriteSheetDialog {
       value: String(this._padding),
       title: msg("padding-title"),
     });
-    this._detectPaddingBtn = Object.assign(document.createElement("button"), {
-      className: "sa-ss-btn sa-ss-btn-secondary",
-      textContent: msg("detect-padding"),
-      title: msg("detect-padding-title"),
-    });
     anchorPaddingRow.append(
       Object.assign(document.createElement("span"), {
         className: "sa-ss-anchor-label",
         textContent: msg("padding-label"),
       }),
       this._paddingInput,
-      this._detectPaddingBtn,
     );
 
     anchorRow.append(this._anchorGrid, anchorPaddingRow);
+    this._anchorRow = anchorRow;
     this._setAnchor(this._anchorIndex);
 
     controlsCol.append(tileSizeSection, nameRow, replaceRow, anchorRow);
@@ -403,10 +396,17 @@ export default class SpriteSheetDialog {
       this._paddingInput.value = String(this._padding);
       this._updateAnchorOverlay();
     });
-    this._detectPaddingBtn.addEventListener("click", () => this._runDetectPadding());
     this._showAnchorBtn.addEventListener("click", () => {
       this._showAnchor = !this._showAnchor;
       this._showAnchorBtn.classList.toggle("sa-ss-anchor-toggle-active", this._showAnchor);
+      this._updateAnchorOverlay();
+    });
+    this._anchorRow.addEventListener("mouseenter", () => {
+      this._hoverAnchor = true;
+      this._updateAnchorOverlay();
+    });
+    this._anchorRow.addEventListener("mouseleave", () => {
+      this._hoverAnchor = false;
       this._updateAnchorOverlay();
     });
     this._replaceCheckbox.addEventListener("change", () => this._updateImportButton());
@@ -485,7 +485,6 @@ export default class SpriteSheetDialog {
     }
     this._applyGridData(best.cols, best.rows, new Set(blank));
     this._setAnalyzing(false, this._msg(`auto-detect-${best.confidence}`), best.confidence);
-    this._updateAnchorOverlay();
   }
 
   /** Resize the viewport canvas to match the current scroll-container size and re-render. */
@@ -523,10 +522,6 @@ export default class SpriteSheetDialog {
     if (this._imageWidth) this._startAnalysis();
   }
 
-  _runDetectPadding() {
-    // Padding is detected automatically when the image first loads (_startAnalysis).
-  }
-
   // ─── Grid management ─────────────────────────────────────────────────────────────────
 
   _onGridInputChange() {
@@ -546,14 +541,6 @@ export default class SpriteSheetDialog {
    * @param {number} rows
    */
   _applyGrid(cols, rows) {
-    this._cols = cols;
-    this._rows = rows;
-    if (this._imageWidth) {
-      this._tileW = Math.floor(this._imageWidth / cols);
-      this._tileH = Math.floor(this._imageHeight / rows);
-      this._tileWInput.value = String(this._tileW);
-      this._tileHInput.value = String(this._tileH);
-    }
     if (this._tileHashes !== null) {
       // Pixel state is ready — reclassify synchronously (O(W×H) but fast, < 10ms).
       const { blank, hashes } = classifyGrid(cols, rows);
@@ -563,13 +550,11 @@ export default class SpriteSheetDialog {
       // Analysis not yet complete — show a blank grid until _startAnalysis() finishes.
       this._applyGridData(cols, rows, new Set());
     }
-    this._updateImportButton();
-    this._updateAnchorOverlay();
   }
 
   /**
-   * Apply a classified grid (blank set + selection state) from a worker response.
-   * Also recomputes the imported-tile highlights from the current costume hashes.
+   * Apply a classified grid to the display: reset tile selection, compute imported highlights,
+   * and create or update the tile grid.
    *
    * @param {number} cols
    * @param {number} rows
@@ -702,7 +687,8 @@ export default class SpriteSheetDialog {
     this._tileGrid.naturalTileH = this._tileH;
     this._tileGrid.anchorPoint = SpriteSheetImporter.anchorToCenter(this._anchorIndex, this._tileW, this._tileH, padding);
     this._tileGrid.tilePadding = padding;
-    this._tileGrid.showAnchor = this._showAnchor;
+    const dragging = this._midDrag !== null || (this._tileGrid?.isDragging ?? false);
+    this._tileGrid.showAnchor = !dragging && (this._showAnchor || this._hoverAnchor);
     this._tileGrid.render();
   }
 
@@ -754,9 +740,10 @@ export default class SpriteSheetDialog {
   _onWrapWheel(e) {
     e.preventDefault();
     const wrap = this._previewWrap;
+    const rect = wrap.getBoundingClientRect();
     // Capture the cursor position relative to the content before zooming.
-    const mouseX = e.clientX - wrap.getBoundingClientRect().left;
-    const mouseY = e.clientY - wrap.getBoundingClientRect().top;
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
     const contentX = (wrap.scrollLeft + mouseX) / this._zoom;
     const contentY = (wrap.scrollTop + mouseY) / this._zoom;
 
@@ -865,7 +852,7 @@ export default class SpriteSheetDialog {
       baseName: this._nameInput.value.trim() || "costume",
       anchorIndex: this._anchorIndex,
       padding: { left: this._padding, top: this._padding, right: this._padding, bottom: this._padding },
-      replaceExisting: this._replaceCheckbox.checked,
+      replaceExisting: replacing,
     };
 
     await this.onImport?.(spec);
