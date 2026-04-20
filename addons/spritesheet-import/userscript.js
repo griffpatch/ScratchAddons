@@ -5,11 +5,13 @@ export default async function ({ addon, msg, console }) {
   const vm = addon.tab.traps.vm;
 
   /**
-   * Create the menu-item wrapper (button + tooltip) for the costume-tab action menu.
+   * Create the menu-item wrapper (button + tooltip) for an action menu.
    *
+   * @param {boolean} isRight - True when the menu is on the right side of the screen
+   *   (sprite panel); the tooltip then appears to the left of the button.
    * @returns {{ wrapper: Element, button: Element, input: HTMLInputElement, tooltip: Element }}
    */
-  function createMenuItem() {
+  function createMenuItem(isRight) {
     const labelText = msg("menu-item");
 
     const wrapper = document.createElement("div");
@@ -42,7 +44,7 @@ export default async function ({ addon, msg, console }) {
     const tooltip = Object.assign(document.createElement("div"), {
       className: [
         "__react_component_tooltip",
-        "place-right",
+        isRight ? "place-left" : "place-right",
         "type-dark",
         addon.tab.scratchClass("action-menu_tooltip"),
         "sa-ss-tooltip",
@@ -55,11 +57,17 @@ export default async function ({ addon, msg, console }) {
     return { wrapper, button, input, tooltip };
   }
 
-  /** Position the tooltip to the right of its wrapper button (called on menu resize). */
-  function positionTooltip(wrapper, tooltip) {
+  /** Position the tooltip alongside its button (called on menu resize). */
+  function positionTooltip(wrapper, tooltip, isRight) {
     const rect = wrapper.getBoundingClientRect();
     tooltip.style.top = `${rect.top + 2}px`;
-    tooltip.style.left = `${rect.left + rect.width}px`;
+    if (isRight) {
+      tooltip.style.right = `${window.innerWidth - rect.right + rect.width + 10}px`;
+      tooltip.style.left = "auto";
+    } else {
+      tooltip.style.left = `${rect.left + rect.width}px`;
+      tooltip.style.right = "auto";
+    }
   }
 
   /**
@@ -67,8 +75,10 @@ export default async function ({ addon, msg, console }) {
    *
    * @param {File} file
    * @param {string} targetId - The sprite target ID captured at the moment of file selection.
+   * @param {boolean} [removeBlankPlaceholder] - If true, delete the initial blank placeholder
+   *   costume ("costume1") after a successful import, provided costumes remain.
    */
-  async function handleFile(file, targetId) {
+  async function handleFile(file, targetId, removeBlankPlaceholder = false) {
     if (!file) return;
 
     const dialog = new SpriteSheetDialog(addon, msg);
@@ -79,7 +89,8 @@ export default async function ({ addon, msg, console }) {
       // will delete all matching costumes and then skip the (empty) import loop.
       if (spec.tiles.length === 0 && !spec.replaceExisting) return;
 
-      if (!vm.runtime.getTargetById(targetId)) {
+      const target = vm.runtime.getTargetById(targetId);
+      if (!target) {
         console.warn("spritesheet-import: target no longer exists, aborting import");
         return;
       }
@@ -97,6 +108,20 @@ export default async function ({ addon, msg, console }) {
         await importer.import(img, spec);
       } catch (err) {
         console.error("spritesheet-import: import failed", err);
+        return;
+      }
+
+      // After a successful import into a freshly created sprite, remove the
+      // blank placeholder costume that vm.addSprite inserted, as long as at
+      // least one imported costume remains.
+      if (removeBlankPlaceholder) {
+        const costumes = target.sprite.costumes_;
+        const blankIdx = costumes.findIndex(
+          (c) => c.assetId === "cd21514d0531fdffb22204e0ec5ed84a"
+        );
+        if (blankIdx !== -1 && costumes.length > 1) {
+          target.deleteCostume(blankIdx);
+        }
       }
     };
 
@@ -107,21 +132,29 @@ export default async function ({ addon, msg, console }) {
   // ─── Menu injection loop ────────────────────────────────────────────────────
 
   while (true) {
-    // Wait for a costume-tab action-menu more-buttons container to appear.
-    const costumeSelector =
-      '[class*="gui_tabs_"] > :nth-child(3) [class*="action-menu_more-buttons_"]';
-    const menu = await addon.tab.waitForElement(costumeSelector, {
-      markAsSeen: true,
-      reduxCondition: (state) => !state.scratchGui.mode.isPlayerOnly,
-      reduxEvents: [
-        "scratch-gui/mode/SET_PLAYER",
-        "fontsLoaded/SET_FONTS_LOADED",
-        "scratch-gui/locales/SELECT_LOCALE",
-        "scratch-gui/navigation/ACTIVATE_TAB",
-      ],
-    });
+    // Wait for an action-menu more-buttons container to appear in either the
+    // costume tab or the sprite panel.
+    const menu = await addon.tab.waitForElement(
+      [
+        '[class*="sprite-selector_sprite-selector_"] [class*="action-menu_more-buttons_"]',
+        '[class*="gui_tabs_"] > :nth-child(3) [class*="action-menu_more-buttons_"]',
+      ].join(", "),
+      {
+        markAsSeen: true,
+        reduxCondition: (state) => !state.scratchGui.mode.isPlayerOnly,
+        reduxEvents: [
+          "scratch-gui/mode/SET_PLAYER",
+          "fontsLoaded/SET_FONTS_LOADED",
+          "scratch-gui/locales/SELECT_LOCALE",
+          "scratch-gui/navigation/ACTIVATE_TAB",
+        ],
+      }
+    );
 
-    const { wrapper, button, input, tooltip } = createMenuItem();
+    // Sprite-panel menus sit on the right side; tooltip should appear to the left.
+    const isRight = !!menu.closest('[class*="sprite-selector_sprite-selector_"]');
+
+    const { wrapper, button, input, tooltip } = createMenuItem(isRight);
     menu.prepend(wrapper);
 
     button.addEventListener("click", (e) => {
@@ -133,14 +166,42 @@ export default async function ({ addon, msg, console }) {
 
     input.addEventListener("change", () => {
       const file = input.files?.[0];
-      // Capture target ID at selection time to survive sprite-switching during the dialog.
-      const targetId = vm.editingTarget?.id ?? "";
-      if (file) handleFile(file, targetId);
+      if (!file) return;
+      if (isRight) {
+        // Sprite-panel context: create a new blank sprite first, then import into it.
+        // vm.addSprite sets editingTarget to the new sprite when it resolves.
+        const blank = JSON.stringify({
+          name: file.name.replace(/\.[^.]+$/, ""),
+          isStage: false, x: 0, y: 0, visible: true, size: 100,
+          rotationStyle: "all around", direction: 90, draggable: false,
+          currentCostume: 0, blocks: {}, variables: {},
+          costumes: [{
+            name: "costume1",
+            bitmapResolution: 1,
+            rotationCenterX: 0, rotationCenterY: 0,
+            assetId: "cd21514d0531fdffb22204e0ec5ed84a",
+            dataFormat: "svg",
+            md5ext: "cd21514d0531fdffb22204e0ec5ed84a.svg",
+          }],
+          sounds: [],
+        });
+        vm.addSprite(blank).then(() => {
+          // Switch to the costume tab so the user can see the imported costumes.
+          addon.tab.redux.dispatch({ type: "scratch-gui/navigation/ACTIVATE_TAB", activeTabIndex: 1 });
+          handleFile(file, vm.editingTarget.id, /* removeBlankPlaceholder */ true);
+        }).catch((err) => {
+          console.error("spritesheet-import: failed to create sprite", err);
+        });
+      } else {
+        // Costume-tab context: import into the currently editing sprite.
+        // Capture target ID now to survive sprite-switching during the dialog.
+        handleFile(file, vm.editingTarget?.id ?? "");
+      }
     });
 
     // Keep tooltip positioned correctly as menu opens/closes/resizes.
-    const observer = new MutationObserver(() => positionTooltip(wrapper, tooltip));
+    const observer = new MutationObserver(() => positionTooltip(wrapper, tooltip, isRight));
     observer.observe(menu, { attributes: true, subtree: true });
-    positionTooltip(wrapper, tooltip);
+    positionTooltip(wrapper, tooltip, isRight);
   }
 }

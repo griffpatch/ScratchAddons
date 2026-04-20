@@ -161,21 +161,28 @@ export default class SpriteSheetTileGrid {
     ctx.lineWidth = sel ? 1.5 : 1; ctx.strokeRect(x + .5, y + .5, w - 1, h - 1);
 
     // Tick badge: blue circle with white checkmark, top-left corner.
+    // R and margin both scale with tile size (floor(minDim/9), min 7) so the
+    // badge stays modest at 200% and grows naturally as the user zooms in.
     if (sel && w >= 20 && h >= 20) {
-      const R = 10, m = 3, cx = x + m + R, cy = y + m + R, a = R * 0.58;
+      const R = Math.max(7, Math.floor(Math.min(w, h) / 9));
+      const m = Math.max(2, Math.floor(R / 4));
+      const cx = x + m + R, cy = y + m + R, a = R * 0.58;
       ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(40,120,255,0.9)"; ctx.fill();
       ctx.save();
-      ctx.strokeStyle = "white"; ctx.lineWidth = 2; ctx.lineCap = ctx.lineJoin = "round";
+      ctx.strokeStyle = "white"; ctx.lineWidth = Math.max(1.5, R / 5); ctx.lineCap = ctx.lineJoin = "round";
       ctx.beginPath();
       ctx.moveTo(cx - a * .62, cy + a * .05); ctx.lineTo(cx - a * .05, cy + a * .72); ctx.lineTo(cx + a * .78, cy - a * .62);
       ctx.stroke(); ctx.restore();
     }
 
-    // Imported badge: small green dot, top-right corner.
+    // Imported badge: green dot, top-right corner.
+    // Scales with tile size (floor(minDim/10), min 4) — larger than the tick
+    // divisor so it stays proportionate and clearly visible at all zoom levels.
     if (imp && w >= 8 && h >= 8) {
-      const r = 3;
-      ctx.beginPath(); ctx.arc(x + w - r - 1.5, y + r + 1.5, r, 0, Math.PI * 2);
+      const r = Math.max(4, Math.floor(Math.min(w, h) / 10));
+      const dm = Math.max(2, Math.floor(r / 2));
+      ctx.beginPath(); ctx.arc(x + w - r - dm, y + r + dm, r, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(0,200,85,0.95)"; ctx.fill();
     }
   }

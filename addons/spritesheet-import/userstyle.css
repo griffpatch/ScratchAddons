@@ -68,6 +68,7 @@
   display: flex;
   flex-shrink: 0;
   gap: 4px;
+  height: 28px; /* fixed height prevents 1px reflow when buttons change filter/state */
 }
 
 .sa-ss-toolbar-divider {
@@ -372,7 +373,9 @@
   cursor: pointer;
   font-size: 0.875rem;
   padding: 6px 14px;
-  transition: filter 0.1s;
+  /* Pre-promote to a compositing layer so the hover filter doesn't trigger
+     a mid-interaction layer creation that can jiggle adjacent elements. */
+  will-change: filter;
 }
 
 .sa-ss-btn:hover:not(:disabled) {
