@@ -109,11 +109,25 @@ export default class SpriteSheetDialog {
       ariaModal: "true",
     });
 
-    // Title
+    // Header bar (purple, matching Scratch modal style)
+    const header = Object.assign(document.createElement("div"), {
+      className: "sa-ss-header",
+    });
     const title = Object.assign(document.createElement("h2"), {
       className: "sa-ss-title",
       textContent: msg("dialog-title"),
     });
+    const closeBtn = Object.assign(document.createElement("button"), {
+      className: "sa-ss-close-btn",
+      type: "button",
+      ariaLabel: msg("close"),
+    });
+    closeBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" width="14" height="14" aria-hidden="true">
+      <line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+    closeBtn.addEventListener("click", () => this._cancel());
+    header.append(title, closeBtn);
 
     // ── Left column: image preview ────────────────────────────────────────────
     const previewCol = Object.assign(document.createElement("div"), {
@@ -371,7 +385,7 @@ export default class SpriteSheetDialog {
     footer.append(keepOpenLabel, this._cancelBtn, this._importBtn);
 
     // Assemble
-    this._dialog.append(title, body, footer);
+    this._dialog.append(header, body, footer);
     this._backdrop.append(this._dialog);
     document.body.append(this._backdrop);
 
