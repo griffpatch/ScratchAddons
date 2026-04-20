@@ -12,8 +12,6 @@
   "spritesheet-import/name-label": "Costume name",
   "spritesheet-import/padding-label": "Padding",
   "spritesheet-import/padding-title": "Transparent inner margin (px) — offsets the anchor point into the visible content area",
-  "spritesheet-import/detect-padding": "Detect",
-  "spritesheet-import/detect-padding-title": "Auto-detect the predominant transparent margin across non-blank tiles",
   "spritesheet-import/replace-existing": "Replace all",
   "spritesheet-import/anchor-label": "Anchor",
   "spritesheet-import/keep-open": "Keep open",
@@ -22,10 +20,9 @@
   "spritesheet-import/import-button": "Import {count} costume(s)",
   "spritesheet-import/replace-button": "Replace with {count} costume(s)",
   "spritesheet-import/remove-all": "Remove all",
-  "spritesheet-import/importing": "Importing\u2026",
   "spritesheet-import/no-tiles": "No tiles selected",
   "spritesheet-import/too-many-tiles": "Too many tiles ({count} selected, {max} max)",
   "spritesheet-import/show-anchors": "Show",
-  "spritesheet-import/show-anchors-title": "Overlay rotation-center markers (×) on each tile",
+  "spritesheet-import/show-anchors-title": "Overlay rotation-center markers on each tile at 200%+ zoom",
   "spritesheet-import/analyzing": "Analyzing…"
 }

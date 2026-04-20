@@ -70,24 +70,58 @@ export default async function ({ addon, msg, console }) {
     }
   }
 
+  /** Load a File into an Image element. */
+  async function loadImage(file) {
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+    URL.revokeObjectURL(img.src);
+    return img;
+  }
+
+  /**
+   * Minimal sprite JSON accepted by vm.addSprite — one blank SVG costume.
+   * The blank costume is removed after import by removePlaceholderCostume().
+   */
+  function makeSpriteJson(name) {
+    return JSON.stringify({
+      name, isStage: false, x: 0, y: 0, visible: true, size: 100,
+      rotationStyle: "all around", direction: 90, draggable: false,
+      currentCostume: 0, blocks: {}, variables: {},
+      costumes: [{
+        name: "costume1", bitmapResolution: 1, rotationCenterX: 0, rotationCenterY: 0,
+        assetId: "cd21514d0531fdffb22204e0ec5ed84a",
+        dataFormat: "svg", md5ext: "cd21514d0531fdffb22204e0ec5ed84a.svg",
+      }],
+      sounds: [],
+    });
+  }
+
+  /**
+   * Remove the blank placeholder costume ("costume1") inserted by vm.addSprite,
+   * provided at least one other costume remains on the target.
+   */
+  function removePlaceholderCostume(target) {
+    const costumes = target.sprite.costumes_;
+    const idx = costumes.findIndex((c) => c.assetId === "cd21514d0531fdffb22204e0ec5ed84a");
+    if (idx !== -1 && costumes.length > 1) target.deleteCostume(idx);
+  }
+
   /**
    * Handle a file chosen from the input — open the dialog and import tiles.
    *
    * @param {File} file
    * @param {string} targetId - The sprite target ID captured at the moment of file selection.
-   * @param {boolean} [removeBlankPlaceholder] - If true, delete the initial blank placeholder
-   *   costume ("costume1") after a successful import, provided costumes remain.
    */
-  async function handleFile(file, targetId, removeBlankPlaceholder = false) {
+  async function handleFile(file, targetId) {
     if (!file) return;
 
     const dialog = new SpriteSheetDialog(addon, msg);
     dialog.getCostumes = () => Array.from(vm.editingTarget?.sprite.costumes_ ?? []);
     dialog.onImport = async (spec) => {
-      if (!spec) return;
       // Allow spec.tiles to be empty when replaceExisting is set — the importer
       // will delete all matching costumes and then skip the (empty) import loop.
-      if (spec.tiles.length === 0 && !spec.replaceExisting) return;
+      if (!spec || (spec.tiles.length === 0 && !spec.replaceExisting)) return;
 
       const target = vm.runtime.getTargetById(targetId);
       if (!target) {
@@ -95,38 +129,15 @@ export default async function ({ addon, msg, console }) {
         return;
       }
 
-      const img = new Image();
-      img.src = URL.createObjectURL(file);
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = reject;
-      });
-      URL.revokeObjectURL(img.src);
-
-      const importer = new SpriteSheetImporter(vm, targetId);
+      const img = await loadImage(file);
       try {
-        await importer.import(img, spec);
+        await new SpriteSheetImporter(vm, targetId).import(img, spec);
       } catch (err) {
         console.error("spritesheet-import: import failed", err);
-        return;
-      }
-
-      // After a successful import into a freshly created sprite, remove the
-      // blank placeholder costume that vm.addSprite inserted, as long as at
-      // least one imported costume remains.
-      if (removeBlankPlaceholder) {
-        const costumes = target.sprite.costumes_;
-        const blankIdx = costumes.findIndex(
-          (c) => c.assetId === "cd21514d0531fdffb22204e0ec5ed84a"
-        );
-        if (blankIdx !== -1 && costumes.length > 1) {
-          target.deleteCostume(blankIdx);
-        }
       }
     };
 
-    const existingCostumes = Array.from(vm.editingTarget?.sprite.costumes_ ?? []);
-    await dialog.open(file, existingCostumes);
+    await dialog.open(file, Array.from(vm.editingTarget?.sprite.costumes_ ?? []));
   }
 
   // ─── Menu injection loop ────────────────────────────────────────────────────
@@ -171,30 +182,13 @@ export default async function ({ addon, msg, console }) {
         // Sprite-panel context: open the dialog immediately (no sprite exists yet).
         // The blank sprite is created lazily inside onImport so the user only waits
         // after they click the Import button, not while configuring the grid.
-        // Pass an empty costume list — there are no existing costumes to compare against.
         const dialog = new SpriteSheetDialog(addon, msg);
         dialog.getCostumes = () => [];
         dialog.onImport = async (spec) => {
-          if (!spec) return;
-          if (spec.tiles.length === 0 && !spec.replaceExisting) return;
+          if (!spec || (spec.tiles.length === 0 && !spec.replaceExisting)) return;
 
           const spriteName = spec.baseName || file.name.replace(/\.[^.]+$/, "");
-          const blank = JSON.stringify({
-            name: spriteName,
-            isStage: false, x: 0, y: 0, visible: true, size: 100,
-            rotationStyle: "all around", direction: 90, draggable: false,
-            currentCostume: 0, blocks: {}, variables: {},
-            costumes: [{
-              name: "costume1",
-              bitmapResolution: 1,
-              rotationCenterX: 0, rotationCenterY: 0,
-              assetId: "cd21514d0531fdffb22204e0ec5ed84a",
-              dataFormat: "svg",
-              md5ext: "cd21514d0531fdffb22204e0ec5ed84a.svg",
-            }],
-            sounds: [],
-          });
-          await vm.addSprite(blank).catch((err) => {
+          await vm.addSprite(makeSpriteJson(spriteName)).catch((err) => {
             console.error("spritesheet-import: failed to create sprite", err);
             throw err;
           });
@@ -202,32 +196,18 @@ export default async function ({ addon, msg, console }) {
           addon.tab.redux.dispatch({ type: "scratch-gui/navigation/ACTIVATE_TAB", activeTabIndex: 1 });
 
           const targetId = vm.editingTarget.id;
-          const img = new Image();
-          img.src = URL.createObjectURL(file);
-          await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
-          URL.revokeObjectURL(img.src);
-
-          const importer = new SpriteSheetImporter(vm, targetId);
+          const img = await loadImage(file);
           try {
-            await importer.import(img, spec);
+            await new SpriteSheetImporter(vm, targetId).import(img, spec);
           } catch (err) {
             console.error("spritesheet-import: import failed", err);
             return;
           }
 
-          // Remove the blank placeholder costume inserted by vm.addSprite.
           const target = vm.runtime.getTargetById(targetId);
-          if (target) {
-            const costumes = target.sprite.costumes_;
-            const blankIdx = costumes.findIndex(
-              (c) => c.assetId === "cd21514d0531fdffb22204e0ec5ed84a"
-            );
-            if (blankIdx !== -1 && costumes.length > 1) {
-              target.deleteCostume(blankIdx);
-            }
-          }
+          if (target) removePlaceholderCostume(target);
         };
-        dialog.open(file, /* existingCostumes */ []);
+        dialog.open(file, []);
       } else {
         // Costume-tab context: import into the currently editing sprite.
         // Capture target ID now to survive sprite-switching during the dialog.

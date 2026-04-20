@@ -34,7 +34,7 @@ export default class SpriteSheetTileGrid {
     this.onSelectionChange = null;
 
     /**
-     * When true, draw a small × at the anchor point on every non-blank tile.
+     * When true, draw a small circle at the anchor point on every non-blank tile at 200%+ zoom.
      * Set anchorPoint to { x, y } in tile-local pixels before enabling.
      */
     this.showAnchor = false;
@@ -49,11 +49,11 @@ export default class SpriteSheetTileGrid {
     // Drag state: null when not dragging.
     this._drag = null; // { baseline: Set, startCol, startRow, targetState }
     this._notifyPending = false;
+    // Document-level drag listeners — attached on mousedown, removed on mouseup.
+    this._dragMove = null;
+    this._dragUp = null;
 
     this._canvas.addEventListener("mousedown", this._onMouseDown.bind(this));
-    this._canvas.addEventListener("mousemove", this._onMouseMove.bind(this));
-    this._canvas.addEventListener("mouseup", this._onMouseUp.bind(this));
-    this._canvas.addEventListener("mouseleave", this._onMouseLeave.bind(this));
 
     this.render();
   }
@@ -110,6 +110,11 @@ export default class SpriteSheetTileGrid {
     return this._cols * this._rows - this._blank.size;
   }
 
+  /** True while a selection drag is in progress. */
+  get isDragging() {
+    return this._drag !== null;
+  }
+
   /**
    * Set the full zoomed image CSS dimensions and re-render.
    * Must be called whenever zoom changes so tile positions are correct.
@@ -143,6 +148,10 @@ export default class SpriteSheetTileGrid {
     const scrollX = this._container.scrollLeft;
     const scrollY = this._container.scrollTop;
 
+    // Padding boxes are drawn first so tile badges (tick, imported dot) render on top.
+    const { left: pl, top: pt, right: pr, bottom: pb } = this.tilePadding;
+    if (pl || pt || pr || pb) this._renderPaddingBoxes(ctx, cols, rows, tileW, tileH, scrollX, scrollY);
+
     for (let r = 1; r <= rows; r++) {
       for (let c = 1; c <= cols; c++) {
         // Tile position in canvas coords = image-space origin minus scroll offset.
@@ -155,10 +164,6 @@ export default class SpriteSheetTileGrid {
         else this._renderContentTile(ctx, x, y, tileW, tileH, this._selected.has(key), this._imported.has(key));
       }
     }
-
-    // Padding boxes are always drawn when padding is applied — independent of showAnchor.
-    const { left: pl, top: pt, right: pr, bottom: pb } = this.tilePadding;
-    if (pl || pt || pr || pb) this._renderPaddingBoxes(ctx, cols, rows, tileW, tileH, scrollX, scrollY);
 
     // Anchor circle: only at 200%+ zoom so it doesn't clutter smaller views.
     const zoom = this.naturalTileW ? tileW / this.naturalTileW : 1;
@@ -300,18 +305,30 @@ export default class SpriteSheetTileGrid {
     };
   }
 
+  /**
+   * Like _tileAt(), but clamps to the image boundary instead of returning null.
+   * Used to extend drag selections when the cursor leaves the image area.
+   */
+  _clampedTileAt(clientX, clientY) {
+    const rect = this._canvas.getBoundingClientRect();
+    const imgX = (clientX - rect.left) + this._container.scrollLeft;
+    const imgY = (clientY - rect.top)  + this._container.scrollTop;
+    const tileW = this._imgCssW / this._cols;
+    const tileH = this._imgCssH / this._rows;
+    return {
+      col: Math.max(1, Math.min(this._cols, Math.floor(imgX / tileW) + 1)),
+      row: Math.max(1, Math.min(this._rows, Math.floor(imgY / tileH) + 1)),
+    };
+  }
+
   _onMouseDown(e) {
     // Only handle left-button clicks; middle-button is reserved for pan.
     if (e.button !== 0) return;
     e.preventDefault();
-    const tile = this._tileAt(e.clientX, e.clientY);
-    // Ignore clicks outside the image area or on blank tiles.
-    if (!tile) return;
-    const { col, row } = tile;
-    if (this._blank.has(`${col}:${row}`)) return;
-    // Target state = opposite of the clicked tile's current state.
-    const targetState = !this._selected.has(`${col}:${row}`);
-    // Snapshot current selection as baseline for the drag.
+    const { col, row } = this._clampedTileAt(e.clientX, e.clientY);
+    const key = `${col}:${row}`;
+    // Target state: toggle the clicked tile if it's selectable, otherwise default to select.
+    const targetState = this._blank.has(key) ? true : !this._selected.has(key);
     this._drag = {
       baseline: new Set(this._selected),
       startCol: col,
@@ -321,27 +338,30 @@ export default class SpriteSheetTileGrid {
     this._applyDragRect(col, row);
     this.render();
     this._notifyChange();
+    // Attach move/up to document so the drag continues outside the canvas.
+    this._dragMove = (e) => this._onDocMouseMove(e);
+    this._dragUp   = (e) => this._onDocMouseUp(e);
+    document.addEventListener("mousemove", this._dragMove);
+    document.addEventListener("mouseup",   this._dragUp);
   }
 
-  _onMouseMove(e) {
+  _onDocMouseMove(e) {
     if (!this._drag) return;
     e.preventDefault();
-    const tile = this._tileAt(e.clientX, e.clientY);
-    if (!tile) return;
-    const { col, row } = tile;
-    // Restore baseline then re-apply rectangle to current cursor position.
+    const { col, row } = this._clampedTileAt(e.clientX, e.clientY);
     this._selected = new Set(this._drag.baseline);
     this._applyDragRect(col, row);
     this.render();
     this._notifyChange();
   }
 
-  _onMouseUp(_e) {
+  _onDocMouseUp(e) {
+    if (e.button !== 0) return;
     this._drag = null;
-  }
-
-  _onMouseLeave(_e) {
-    this._drag = null;
+    document.removeEventListener("mousemove", this._dragMove);
+    document.removeEventListener("mouseup",   this._dragUp);
+    this._dragMove = null;
+    this._dragUp   = null;
   }
 
   /** Apply the drag rectangle from drag start to (currentCol, currentRow). */
