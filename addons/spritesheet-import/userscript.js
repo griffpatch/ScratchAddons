@@ -89,7 +89,10 @@ export default async function ({ addon, msg, console }) {
     const dialog = new SpriteSheetDialog(addon, msg);
     dialog.getCostumes = () => Array.from(vm.editingTarget?.sprite.costumes_ ?? []);
     dialog.onImport = async (spec) => {
-      if (!spec || spec.tiles.length === 0) return;
+      if (!spec) return;
+      // Allow spec.tiles to be empty when replaceExisting is set — the importer
+      // will delete all matching costumes and then skip the (empty) import loop.
+      if (spec.tiles.length === 0 && !spec.replaceExisting) return;
 
       if (!vm.runtime.getTargetById(targetId)) {
         console.warn("spritesheet-import: target no longer exists, aborting import");
