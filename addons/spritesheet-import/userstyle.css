@@ -10,7 +10,7 @@
 .sa-ss-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--editorDarkMode-popup, hsla(215, 100%, 65%, 0.9));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -20,10 +20,11 @@
 /* ─── Dialog container ───────────────────────────────────────────────────── */
 
 .sa-ss-dialog {
-  background: var(--ui-modal-background, #fff);
-  border-radius: 8px;
+  background: var(--editorDarkMode-selector, #fff);
+  border-radius: 0.5rem;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-  color: var(--text-primary, #1e1e2e);
+  outline: 4px solid hsla(0, 100%, 100%, 0.25);
+  color: var(--editorDarkMode-selector-text, #575e75);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -31,15 +32,50 @@
   max-height: 88vh;
   max-width: min(92vw, 1000px);
   overflow: hidden;
-  padding: 20px 24px 16px;
+  padding: 0 0 16px;
   width: 960px;
 }
 
-.sa-ss-title {
+/* ─── Modal header ───────────────────────────────────────────────────────── */
+
+.sa-ss-header {
+  align-items: center;
+  background: var(--editorDarkMode-menuBar, #855cd6);
+  border-bottom: 1px solid var(--editorDarkMode-menuBar-border, transparent);
+  border-radius: 0.5rem 0.5rem 0 0;
+  color: var(--editorDarkMode-menuBar-text, #fff);
+  display: flex;
   flex-shrink: 0;
-  font-size: 1.1rem;
-  font-weight: 700;
+  justify-content: space-between;
+  padding: 12px 12px 12px 20px;
+}
+
+.sa-ss-title {
+  color: inherit;
+  font-size: 1rem;
+  font-weight: 600;
   margin: 0;
+}
+
+.sa-ss-close-btn {
+  align-items: center;
+  background: var(--editorDarkMode-menuBar-border, rgba(255, 255, 255, 0.25));
+  border: none;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--editorDarkMode-menuBar-border, rgba(255, 255, 255, 0.25));
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-shrink: 0;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  width: 28px;
+}
+
+.sa-ss-close-btn:hover {
+  background: var(--editorDarkMode-menuBar-border, rgba(255, 255, 255, 0.4));
+  box-shadow: 0 0 0 2px var(--editorDarkMode-menuBar-border, rgba(255, 255, 255, 0.4));
 }
 
 /* ─── Two-column body ────────────────────────────────────────────────────── */
@@ -49,6 +85,7 @@
   flex: 1;
   gap: 16px;
   min-height: 0; /* required for flex children to observe overflow */
+  padding: 0 24px;
 }
 
 /* ─── Left column: image preview ─────────────────────────────────────────── */
@@ -72,7 +109,7 @@
 }
 
 .sa-ss-toolbar-divider {
-  background: var(--ui-border, #ddd);
+  background: var(--editorDarkMode-border, #ddd);
   height: 18px;
   margin: 0 4px;
   width: 1px;
@@ -94,7 +131,7 @@
 
 .sa-ss-preview-wrap {
   background: repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 0 0 / 16px 16px;
-  border: 1px solid var(--ui-border, #ddd);
+  border: 1px solid var(--editorDarkMode-border, #ddd);
   border-radius: 4px;
   flex: 1;
   min-height: 0;
@@ -173,7 +210,7 @@
 /* ─── Selection count (plain text in toolbar) ───────────────────────────── */
 
 .sa-ss-selection-count {
-  color: var(--text-primary, #575e75);
+  color: var(--editorDarkMode-selector-text, #575e75);
   font-size: 0.8rem;
   margin-left: 4px;
   opacity: 0.75;
@@ -183,7 +220,7 @@
 /* ─── Shared field label style ───────────────────────────────────────────── */
 
 .sa-ss-field-label {
-  color: var(--text-primary, #575e75);
+  color: var(--editorDarkMode-selector-text, #575e75);
   display: block;
   font-size: 0.8rem;
   margin-bottom: 3px;
@@ -210,12 +247,14 @@
 }
 
 .sa-ss-tile-field > span {
-  color: var(--text-primary, #575e75);
+  color: var(--editorDarkMode-selector-text, #575e75);
   font-size: 0.8rem;
 }
 
 .sa-ss-spinner {
-  border: 1px solid var(--ui-border, #ccc);
+  background: var(--editorDarkMode-input, #fff);
+  border: 1px solid var(--editorDarkMode-border, #ccc);
+  color: var(--editorDarkMode-input-text, #575e75);
   border-radius: 4px;
   box-sizing: border-box;
   padding: 4px 6px;
@@ -280,14 +319,16 @@
 
 .sa-ss-name-label > span {
   align-self: flex-start;
-  color: var(--text-primary, #575e75);
+  color: var(--editorDarkMode-selector-text, #575e75);
   font-size: 0.8rem;
 }
 
 .sa-ss-name-input {
-  border: 1px solid var(--ui-border, #ccc);
+  background: var(--editorDarkMode-input, #fff);
+  border: 1px solid var(--editorDarkMode-border, #ccc);
   border-radius: 4px;
   box-sizing: border-box;
+  color: var(--editorDarkMode-input-text, #575e75);
   padding: 4px 8px;
   width: 100%;
 }
@@ -306,7 +347,7 @@
 
 .sa-ss-anchor-row {
   align-items: flex-start;
-  border-top: 1px solid var(--ui-border, #e0e0e0);
+  border-top: 1px solid var(--editorDarkMode-border, #e0e0e0);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -320,7 +361,7 @@
 }
 
 .sa-ss-anchor-label {
-  color: var(--text-primary, #575e75);
+  color: var(--editorDarkMode-selector-text, #575e75);
   font-size: 0.8rem;
 }
 
@@ -365,7 +406,7 @@
 }
 
 .sa-ss-anchor-btn {
-  background: var(--ui-border, #ccc);
+  background: var(--editorDarkMode-border, #ccc);
   border: none;
   border-radius: 50%;
   cursor: pointer;
@@ -391,11 +432,11 @@
 
 .sa-ss-footer {
   align-items: center;
-  border-top: 1px solid var(--ui-border, #e0e0e0);
+  border-top: 1px solid var(--editorDarkMode-border, #e0e0e0);
   display: flex;
   flex-shrink: 0;
   gap: 8px;
-  padding-top: 12px;
+  padding: 12px 24px 0;
 }
 
 .sa-ss-keep-open-label {
@@ -431,34 +472,17 @@
 }
 
 .sa-ss-btn-secondary {
-  background: var(--ui-secondary, #e0e0e0);
-  color: inherit;
+  background: var(--editorDarkMode-tab, #e0e0e0);
+  border: 1px solid var(--editorDarkMode-menuBar-border, transparent);
+  color: var(--editorDarkMode-selector-text, inherit);
 }
 
 
 
 .sa-ss-btn-primary {
-  background: #4c9fec;
-  color: #fff;
+  background: var(--editorDarkMode-primary, hsla(260, 60%, 60%, 1));
+  color: var(--editorDarkMode-primary-text, #fff);
   font-weight: 600;
 }
 
-/* ─── Scratch dark mode ──────────────────────────────────────────────────── */
 
-[theme="dark"] .sa-ss-dialog,
-.sa-ss-dialog[data-theme="dark"] {
-  background: #2a2a3a;
-  color: #e8e8f0;
-}
-
-[theme="dark"] .sa-ss-spinner,
-[theme="dark"] .sa-ss-name-input {
-  background: #1e1e2e;
-  border-color: #555;
-  color: #e8e8f0;
-}
-
-[theme="dark"] .sa-ss-btn-secondary {
-  background: #3a3a4a;
-  color: #e8e8f0;
-}
