@@ -1,4 +1,5 @@
 import SpriteSheetAnalyzer from "./SpriteSheetAnalyzer.js";
+import SpriteSheetImporter from "./SpriteSheetImporter.js";
 import SpriteSheetTileGrid from "./SpriteSheetTileGrid.js";
 
 /** Zoom levels available via the + / − buttons. */
@@ -35,6 +36,8 @@ export default class SpriteSheetDialog {
     this._tileW = 16;
     this._tileH = 16;
     this._anchorIndex = _lastAnchorIndex;
+    this._padding = 0;
+    this._showAnchor = false;
     this._zoom = 1;
     this._midDrag = null;
     /** @type {Set<number> | null} djb2 hashes of existing costume pixel data; null while decoding. */
@@ -129,14 +132,15 @@ export default class SpriteSheetDialog {
       className: "sa-ss-btn sa-ss-btn-secondary sa-ss-zoom-btn",
       textContent: msg("clear-all"),
     });
-    const countDivider = Object.assign(document.createElement("span"), {
-      className: "sa-ss-toolbar-divider",
-    });
     this._selectionCounter = Object.assign(document.createElement("span"), {
       className: "sa-ss-selection-count",
       textContent: "0 / 0",
     });
-    zoomBar.append(this._zoomOutBtn, this._zoomLabel, this._zoomInBtn, this._zoomResetBtn, zoomDivider, this._selectAllBtn, this._clearAllBtn, this._selectionCounter);
+    zoomBar.append(
+      this._zoomOutBtn, this._zoomLabel, this._zoomInBtn, this._zoomResetBtn,
+      zoomDivider,
+      this._selectAllBtn, this._clearAllBtn, this._selectionCounter,
+    );
 
     // Preview area: scrollable wrap → inner div (inline-block at zoom size) → img + canvas
     this._previewWrap = Object.assign(document.createElement("div"), {
@@ -243,12 +247,23 @@ export default class SpriteSheetDialog {
     const anchorRow = Object.assign(document.createElement("div"), {
       className: "sa-ss-anchor-row",
     });
-    anchorRow.append(
+    const anchorHeader = Object.assign(document.createElement("div"), {
+      className: "sa-ss-anchor-header",
+    });
+    this._showAnchorBtn = Object.assign(document.createElement("button"), {
+      className: "sa-ss-anchor-toggle",
+      textContent: msg("show-anchors"),
+      title: msg("show-anchors-title"),
+      type: "button",
+    });
+    anchorHeader.append(
       Object.assign(document.createElement("span"), {
         className: "sa-ss-anchor-label",
         textContent: msg("anchor-label"),
-      })
+      }),
+      this._showAnchorBtn,
     );
+    anchorRow.append(anchorHeader);
     this._anchorGrid = Object.assign(document.createElement("div"), {
       className: "sa-ss-anchor-grid",
     });
@@ -262,7 +277,34 @@ export default class SpriteSheetDialog {
       return btn;
     });
     this._anchorGrid.append(...this._anchorBtns);
-    anchorRow.append(this._anchorGrid);
+
+    // Padding — shown inside the anchor section because it directly offsets the anchor point.
+    const anchorPaddingRow = Object.assign(document.createElement("div"), {
+      className: "sa-ss-anchor-padding-row",
+    });
+    this._paddingInput = Object.assign(document.createElement("input"), {
+      type: "number",
+      className: "sa-ss-spinner sa-ss-anchor-padding-input",
+      min: "0",
+      max: "256",
+      value: String(this._padding),
+      title: msg("padding-title"),
+    });
+    this._detectPaddingBtn = Object.assign(document.createElement("button"), {
+      className: "sa-ss-btn sa-ss-btn-secondary",
+      textContent: msg("detect-padding"),
+      title: msg("detect-padding-title"),
+    });
+    anchorPaddingRow.append(
+      Object.assign(document.createElement("span"), {
+        className: "sa-ss-anchor-label",
+        textContent: msg("padding-label"),
+      }),
+      this._paddingInput,
+      this._detectPaddingBtn,
+    );
+
+    anchorRow.append(this._anchorGrid, anchorPaddingRow);
     this._setAnchor(this._anchorIndex);
 
     controlsCol.append(tileSizeSection, nameRow, replaceRow, anchorRow);
@@ -322,6 +364,17 @@ export default class SpriteSheetDialog {
     this._clearAllBtn.addEventListener("click", () => this._tileGrid?.clearAll());
     this._tileWInput.addEventListener("change", () => this._onGridInputChange());
     this._tileHInput.addEventListener("change", () => this._onGridInputChange());
+    this._paddingInput.addEventListener("change", () => {
+      this._padding = Math.max(0, parseInt(this._paddingInput.value, 10) || 0);
+      this._paddingInput.value = String(this._padding);
+      this._updateAnchorOverlay();
+    });
+    this._detectPaddingBtn.addEventListener("click", () => this._runDetectPadding());
+    this._showAnchorBtn.addEventListener("click", () => {
+      this._showAnchor = !this._showAnchor;
+      this._showAnchorBtn.classList.toggle("sa-ss-anchor-toggle-active", this._showAnchor);
+      this._updateAnchorOverlay();
+    });
     this._replaceCheckbox.addEventListener("change", () => this._updateImportButton());
     this._zoomInBtn.addEventListener("click", () => this._zoomIn());
     this._zoomOutBtn.addEventListener("click", () => this._zoomOut());
@@ -361,6 +414,7 @@ export default class SpriteSheetDialog {
         const zoom = naturalW * 4 <= w && naturalH * 4 <= h ? 4 : 2;
         this._setZoom(zoom);
         this._runAutoDetect();
+        this._runDetectPadding();
       });
     };
     this._previewImg.src = url;
@@ -375,6 +429,17 @@ export default class SpriteSheetDialog {
     this._applyGrid(best.cols, best.rows);
     this._detectMsg.textContent = this._msg(`auto-detect-${best.confidence}`);
     this._detectMsg.dataset.confidence = best.confidence;
+  }
+
+  _runDetectPadding() {
+    if (!this._analyzer) return;
+    const p = this._analyzer.detectPadding(this._cols, this._rows);
+    // Use the minimum of the four sides as a single symmetric padding value,
+    // since the anchor grid only supports one uniform inset.
+    const uniform = Math.min(p.left, p.top, p.right, p.bottom);
+    this._padding = uniform;
+    this._paddingInput.value = String(uniform);
+    this._updateAnchorOverlay();
   }
 
   // ─── Grid management ────────────────────────────────────────────────────────
@@ -439,6 +504,7 @@ export default class SpriteSheetDialog {
     }
 
     this._updateImportButton();
+    this._updateAnchorOverlay();
   }
 
   // ─── Already-imported highlighting ──────────────────────────────────────────
@@ -520,6 +586,22 @@ export default class SpriteSheetDialog {
     this._anchorBtns.forEach((btn, i) => {
       btn.classList.toggle("sa-ss-anchor-selected", i === index);
     });
+    this._updateAnchorOverlay();
+  }
+
+  /**
+   * Push the current anchor position and padding to the tile grid overlay.
+   * Called whenever anchorIndex, padding, or grid dimensions change.
+   */
+  _updateAnchorOverlay() {
+    if (!this._tileGrid) return;
+    const padding = { left: this._padding, top: this._padding, right: this._padding, bottom: this._padding };
+    this._tileGrid.naturalTileW = this._tileW;
+    this._tileGrid.naturalTileH = this._tileH;
+    this._tileGrid.anchorPoint = SpriteSheetImporter.anchorToCenter(this._anchorIndex, this._tileW, this._tileH, padding);
+    this._tileGrid.tilePadding = padding;
+    this._tileGrid.showAnchor = this._showAnchor;
+    this._tileGrid.render();
   }
 
   _anchorTitle(index) {
@@ -671,6 +753,7 @@ export default class SpriteSheetDialog {
       rows: this._rows,
       baseName: this._nameInput.value.trim() || "costume",
       anchorIndex: this._anchorIndex,
+      padding: { left: this._padding, top: this._padding, right: this._padding, bottom: this._padding },
       replaceExisting: this._replaceCheckbox.checked,
     };
 

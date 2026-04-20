@@ -1,3 +1,10 @@
+@import url("../../libraries/common/cs/react-tooltip.css");
+
+/* Show the menu button tooltip on hover (Scratch keeps it visibility:hidden by default). */
+.sa-ss-menu-btn:hover + .sa-ss-tooltip {
+  visibility: visible;
+}
+
 /* ─── Modal backdrop ─────────────────────────────────────────────────────── */
 
 .sa-ss-backdrop {
@@ -255,8 +262,16 @@
 
 .sa-ss-anchor-row {
   align-items: flex-start;
+  border-top: 1px solid var(--ui-border, #e0e0e0);
   display: flex;
   flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+}
+
+.sa-ss-anchor-header {
+  align-items: center;
+  display: flex;
   gap: 6px;
 }
 
@@ -265,11 +280,44 @@
   font-size: 0.8rem;
 }
 
+.sa-ss-anchor-toggle {
+  background: none;
+  border: 1px solid #4c9fec;
+  border-radius: 3px;
+  color: #4c9fec;
+  cursor: pointer;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 1px 5px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sa-ss-anchor-toggle:hover {
+  filter: brightness(0.85);
+}
+
+.sa-ss-anchor-toggle-active {
+  background: #4c9fec;
+  color: #fff;
+}
+
 .sa-ss-anchor-grid {
   display: grid;
   gap: 4px;
   grid-template-columns: repeat(3, 20px);
   grid-template-rows: repeat(3, 20px);
+}
+
+/* Padding spinner sits inline below the anchor grid, inside the anchor section. */
+.sa-ss-anchor-padding-row {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+.sa-ss-anchor-padding-input {
+  width: 56px;
 }
 
 .sa-ss-anchor-btn {
@@ -340,6 +388,8 @@
   background: var(--ui-secondary, #e0e0e0);
   color: inherit;
 }
+
+
 
 .sa-ss-btn-primary {
   background: #4c9fec;
