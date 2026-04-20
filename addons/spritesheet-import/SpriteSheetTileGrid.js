@@ -156,8 +156,13 @@ export default class SpriteSheetTileGrid {
       }
     }
 
-    // Anchor overlay drawn last so it sits on top of all tile fills and badges.
-    if (this.showAnchor) this._renderAnchorPoints(ctx, cols, rows, tileW, tileH, scrollX, scrollY);
+    // Padding boxes are always drawn when padding is applied — independent of showAnchor.
+    const { left: pl, top: pt, right: pr, bottom: pb } = this.tilePadding;
+    if (pl || pt || pr || pb) this._renderPaddingBoxes(ctx, cols, rows, tileW, tileH, scrollX, scrollY);
+
+    // Anchor circle: only at 200%+ zoom so it doesn't clutter smaller views.
+    const zoom = this.naturalTileW ? tileW / this.naturalTileW : 1;
+    if (this.showAnchor && zoom >= 2) this._renderAnchorPoints(ctx, cols, rows, tileW, tileH, scrollX, scrollY);
   }
 
   /** Call fn(x, y) for the top-left corner of every non-blank tile visible in the viewport. */
@@ -229,48 +234,39 @@ export default class SpriteSheetTileGrid {
   }
 
   /**
-   * Draw the anchor overlay on every non-blank tile:
-   *   1. Dashed content-box rect showing the transparent padding inset.
-   *   2. Scratch-style crosshair (circle + four arms) at the anchor point.
-   * Both use a two-pass technique (dark outline then coloured stroke) so they
-   * remain legible against any sprite background colour.
+   * Dashed content-box rect showing the transparent padding inset on every non-blank tile.
+   * Uses a two-pass technique (dark outline then white dashed stroke) so it remains
+   * legible against any sprite background colour.
    * All sizes are in fixed CSS pixels so they don't scale with zoom.
    */
+  _renderPaddingBoxes(ctx, cols, rows, tileW, tileH, scrollX, scrollY) {
+    const { left: pl, top: pt, right: pr, bottom: pb } = this.tilePadding;
+    const lx = (pl / this.naturalTileW) * tileW, ty = (pt / this.naturalTileH) * tileH;
+    const bw = tileW - lx - (pr / this.naturalTileW) * tileW;
+    const bh = tileH - ty - (pb / this.naturalTileH) * tileH;
+    for (const [color, lw, dash] of [["rgba(0,0,0,0.5)", 3, []], ["rgba(255,255,255,0.9)", 1, [4, 3]]]) {
+      ctx.save();
+      ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.setLineDash(dash);
+      this._forTiles(cols, rows, tileW, tileH, scrollX, scrollY,
+        (x, y) => ctx.strokeRect(x + lx + .5, y + ty + .5, bw - 1, bh - 1));
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Draw a small circle at the anchor point on every non-blank tile.
+   * Only called at 200%+ zoom (see render()). Uses a two-pass technique
+   * (dark outline then yellow fill) so it remains legible against any background.
+   */
   _renderAnchorPoints(ctx, cols, rows, tileW, tileH, scrollX, scrollY) {
-    // Convert anchor from natural image pixels to CSS (zoomed) pixels.
     const ax = (this.anchorPoint.x / this.naturalTileW) * tileW;
     const ay = (this.anchorPoint.y / this.naturalTileH) * tileH;
-
-    // Padding content-box rect — only drawn when padding is non-zero.
-    const { left: pl, top: pt, right: pr, bottom: pb } = this.tilePadding;
-    if (pl || pt || pr || pb) {
-      const lx = (pl / this.naturalTileW) * tileW, ty = (pt / this.naturalTileH) * tileH;
-      const bw = tileW - lx - (pr / this.naturalTileW) * tileW;
-      const bh = tileH - ty - (pb / this.naturalTileH) * tileH;
-      for (const [color, lw, dash] of [["rgba(0,0,0,0.5)", 3, []], ["rgba(255,255,255,0.9)", 1, [4, 3]]]) {
-        ctx.save();
-        ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.setLineDash(dash);
-        this._forTiles(cols, rows, tileW, tileH, scrollX, scrollY,
-          (x, y) => ctx.strokeRect(x + lx + .5, y + ty + .5, bw - 1, bh - 1));
-        ctx.restore();
-      }
-    }
-
-    // Scratch-style crosshair: circle (R=5) with four arms (length=5, gap=2 from circle edge).
-    const R = 5, gap = 2, arm = 5;
-    const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]]; // top, bottom, left, right
+    const R = 5;
     for (const [color, lw] of [["rgba(0,0,0,0.6)", 3.5], ["rgba(255,220,0,1)", 1.5]]) {
       ctx.save();
-      ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = "round";
+      ctx.strokeStyle = color; ctx.lineWidth = lw;
       this._forTiles(cols, rows, tileW, tileH, scrollX, scrollY, (x, y) => {
-        const ox = x + ax, oy = y + ay;
-        ctx.beginPath(); ctx.arc(ox, oy, R, 0, Math.PI * 2); ctx.stroke();
-        ctx.beginPath();
-        for (const [dx, dy] of dirs) {
-          ctx.moveTo(ox + dx * (R + gap), oy + dy * (R + gap));
-          ctx.lineTo(ox + dx * (R + gap + arm), oy + dy * (R + gap + arm));
-        }
-        ctx.stroke();
+        ctx.beginPath(); ctx.arc(x + ax, y + ay, R, 0, Math.PI * 2); ctx.stroke();
       });
       ctx.restore();
     }
