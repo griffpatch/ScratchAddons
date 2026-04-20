@@ -1,4 +1,4 @@
-import { WORKER_CODE } from "./SpriteSheetWorker.js";
+import { analyzeImage, classifyGrid } from "./SpriteSheetWorker.js";
 import SpriteSheetImporter from "./SpriteSheetImporter.js";
 import SpriteSheetTileGrid from "./SpriteSheetTileGrid.js";
 
@@ -62,10 +62,7 @@ export default class SpriteSheetDialog {
     this._showAnchor = false;
     this._zoom = 1;
     this._midDrag = null;
-    // Pixel analysis worker — created per dialog open, terminated on close.
-    this._worker = null;
-    this._workerSeq = 0; // sequence number to discard stale classify responses
-    /** @type {Map<string,number>|null} Tile-key → djb2 hash from worker; null until ready. */
+    /** @type {Map<string,number>|null} Tile-key → djb2 hash; null until analysis completes. */
     this._tileHashes = null;
     this._resizeObserver = null;
     /** @type {Set<number>|null} djb2 hashes of existing costume pixel data; null while decoding. */
@@ -453,65 +450,42 @@ export default class SpriteSheetDialog {
         const zoom = this._imageWidth * 4 <= w && this._imageHeight * 4 <= h ? 4 : 2;
         this._setZoom(zoom);
       });
-      // Transfer the image to the worker as a bitmap for off-thread pixel analysis.
-      this._startWorker();
+      this._startAnalysis();
     };
     this._previewImg.src = url;
   }
 
   /**
-   * Create the analysis worker, transfer the image bitmap, and wire the response handler.
-   * The worker runs detectGrid, detectPadding, and classifyTiles entirely off-thread.
+   * Run pixel analysis and populate the grid. Shows the spinner first, then yields
+   * via setTimeout so the browser can paint before the synchronous work starts.
+   * CSS animations are compositor-threaded, so the spinner keeps animating during
+   * the ~100ms analysis block.
    */
-  async _startWorker() {
-    // createImageBitmap creates a GPU-backed copy; transferring it hands sole
-    // ownership to the worker so the main thread holds no CPU pixel buffer.
-    const t0 = performance.now();
-    const bitmap = await createImageBitmap(this._previewImg);
-    console.log(`[spritesheet-import] createImageBitmap ${(performance.now()-t0).toFixed(0)}ms`);
-    // Guard: dialog may have been closed while we awaited.
-    if (!this._resolve) { bitmap.close(); return; }
-    const blob = new Blob([WORKER_CODE], { type: "application/javascript" });
-    const workerUrl = URL.createObjectURL(blob);
-    this._worker = new Worker(workerUrl);
-    URL.revokeObjectURL(workerUrl);
-    this._worker.onmessage = (e) => this._onWorkerMessage(e.data);
-    this._worker.onerror = (err) => console.error("spritesheet-import: worker error", err);
-    this._worker.postMessage({ type: "init", bitmap }, [bitmap]);
-    // Show spinner immediately — worker result is async.
+  async _startAnalysis() {
     this._setAnalyzing(true, this._msg("analyzing"));
-  }
+    // Yield so the spinner renders before the synchronous analysis starts.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (!this._resolve) return; // dialog closed while yielding
 
-  /** Handle messages from the analysis worker. */
-  _onWorkerMessage(data) {
-    if (data.type === "ready") {
-      const { candidates, padding, blank, hashes } = data;
-      this._tileHashes = new Map(Object.entries(hashes));
-      // Apply uniform padding (min of all sides — anchor grid only supports symmetric inset).
-      const uniform = Math.min(padding.left, padding.top, padding.right, padding.bottom);
-      this._padding = uniform;
-      this._paddingInput.value = String(uniform);
-      // Populate the grid with the best candidate from the detector.
-      // If confidence is low, fall back to 32×32 (clamped to image dimensions)
-      // rather than showing a nonsensical auto-detected grid.
-      let best = candidates[0];
-      if (best.confidence === 'low') {
-        const fallbackW = 32, fallbackH = 32;
-        const fallbackCols = Math.max(1, Math.floor(this._imageWidth / fallbackW));
-        const fallbackRows = Math.max(1, Math.floor(this._imageHeight / fallbackH));
-        // Find a classified candidate matching these dimensions, or use a stub.
-        best = candidates.find(c => c.cols === fallbackCols && c.rows === fallbackRows)
-          ?? { cols: fallbackCols, rows: fallbackRows, confidence: 'low' };
-      }
-      this._applyGridData(best.cols, best.rows, new Set(blank));
-      this._setAnalyzing(false, this._msg(`auto-detect-${best.confidence}`), best.confidence);
-      this._updateAnchorOverlay();
-    } else if (data.type === "classified") {
-      if (data.seq !== this._workerSeq) return; // stale — user changed grid again before this arrived
-      this._tileHashes = new Map(Object.entries(data.hashes));
-      this._setAnalyzing(false);
-      this._applyGridData(this._cols, this._rows, new Set(data.blank));
+    const { candidates, padding, blank, hashes } = analyzeImage(this._previewImg);
+    this._tileHashes = new Map(Object.entries(hashes));
+
+    // Apply uniform padding (min of all sides — anchor grid supports symmetric inset only).
+    const uniform = Math.min(padding.left, padding.top, padding.right, padding.bottom);
+    this._padding = uniform;
+    this._paddingInput.value = String(uniform);
+
+    // If confidence is low, fall back to 32×32 rather than showing a nonsensical guess.
+    let best = candidates[0];
+    if (best.confidence === "low") {
+      const fallbackCols = Math.max(1, Math.floor(this._imageWidth / 32));
+      const fallbackRows = Math.max(1, Math.floor(this._imageHeight / 32));
+      best = candidates.find((c) => c.cols === fallbackCols && c.rows === fallbackRows)
+        ?? { cols: fallbackCols, rows: fallbackRows, confidence: "low" };
     }
+    this._applyGridData(best.cols, best.rows, new Set(blank));
+    this._setAnalyzing(false, this._msg(`auto-detect-${best.confidence}`), best.confidence);
+    this._updateAnchorOverlay();
   }
 
   /** Resize the viewport canvas to match the current scroll-container size and re-render. */
@@ -543,15 +517,14 @@ export default class SpriteSheetDialog {
       delete this._detectMsg.dataset.confidence;
     }
   }
-  // ─── Auto-detect (now delegated to worker on open) ───────────────────────────────────
+  // ─── Auto-detect ─────────────────────────────────────────────────────────────────────
 
   _runAutoDetect() {
-    // Detection runs in the worker on open. Button is wired but no-ops —
-    // forward-compatible placeholder in case we add a re-detect path later.
+    if (this._imageWidth) this._startAnalysis();
   }
 
   _runDetectPadding() {
-    // Padding detection runs in the worker on open.
+    // Padding is detected automatically when the image first loads (_startAnalysis).
   }
 
   // ─── Grid management ─────────────────────────────────────────────────────────────────
@@ -567,8 +540,7 @@ export default class SpriteSheetDialog {
   }
 
   /**
-   * Ask the worker to classify a new grid layout.
-   * The result comes back asynchronously via _onWorkerMessage.
+   * Reclassify tiles for a new grid layout and update the display.
    *
    * @param {number} cols
    * @param {number} rows
@@ -582,11 +554,13 @@ export default class SpriteSheetDialog {
       this._tileWInput.value = String(this._tileW);
       this._tileHInput.value = String(this._tileH);
     }
-    this._workerSeq++;
-    this._worker?.postMessage({ type: "classify", cols, rows, seq: this._workerSeq });
-    if (this._worker) this._setAnalyzing(true, this._msg("analyzing"));
-    // If worker data not yet available, show a blank grid until the response arrives.
-    if (!this._tileHashes) {
+    if (this._tileHashes !== null) {
+      // Pixel state is ready — reclassify synchronously (O(W×H) but fast, < 10ms).
+      const { blank, hashes } = classifyGrid(cols, rows);
+      this._tileHashes = new Map(Object.entries(hashes));
+      this._applyGridData(cols, rows, new Set(blank));
+    } else {
+      // Analysis not yet complete — show a blank grid until _startAnalysis() finishes.
       this._applyGridData(cols, rows, new Set());
     }
     this._updateImportButton();
@@ -922,13 +896,11 @@ export default class SpriteSheetDialog {
   _close() {
     this._backdrop.remove();
     this._resizeObserver?.disconnect();
-    this._worker?.terminate();
     if (this._onKeyDown) document.removeEventListener("keydown", this._onKeyDown);
     // Clean up any in-flight document-level pan listeners.
     if (this._midDragMove) document.removeEventListener("mousemove", this._midDragMove);
     if (this._midDragUp) document.removeEventListener("mouseup", this._midDragUp);
     this._tileGrid = null;
-    this._worker = null;
     this._midDrag = null;
     this._midDragMove = null;
     this._midDragUp = null;
