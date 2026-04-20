@@ -24,6 +24,8 @@
   "spritesheet-import/remove-all": "Remove all",
   "spritesheet-import/importing": "Importing\u2026",
   "spritesheet-import/no-tiles": "No tiles selected",
+  "spritesheet-import/too-many-tiles": "Too many tiles ({count} selected, {max} max)",
   "spritesheet-import/show-anchors": "Show",
-  "spritesheet-import/show-anchors-title": "Overlay rotation-center markers (×) on each tile"
+  "spritesheet-import/show-anchors-title": "Overlay rotation-center markers (×) on each tile",
+  "spritesheet-import/analyzing": "Analyzing…"
 }

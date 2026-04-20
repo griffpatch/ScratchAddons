@@ -168,38 +168,72 @@ export default async function ({ addon, msg, console }) {
       const file = input.files?.[0];
       if (!file) return;
       if (isRight) {
-        // Sprite-panel context: create a new blank sprite first, then import into it.
-        // vm.addSprite sets editingTarget to the new sprite when it resolves.
-        const blank = JSON.stringify({
-          name: file.name.replace(/\.[^.]+$/, ""),
-          isStage: false, x: 0, y: 0, visible: true, size: 100,
-          rotationStyle: "all around", direction: 90, draggable: false,
-          currentCostume: 0, blocks: {}, variables: {},
-          costumes: [{
-            name: "costume1",
-            bitmapResolution: 1,
-            rotationCenterX: 0, rotationCenterY: 0,
-            assetId: "cd21514d0531fdffb22204e0ec5ed84a",
-            dataFormat: "svg",
-            md5ext: "cd21514d0531fdffb22204e0ec5ed84a.svg",
-          }],
-          sounds: [],
-        });
-        vm.addSprite(blank).then(() => {
+        // Sprite-panel context: open the dialog immediately (no sprite exists yet).
+        // The blank sprite is created lazily inside onImport so the user only waits
+        // after they click the Import button, not while configuring the grid.
+        // Pass an empty costume list — there are no existing costumes to compare against.
+        const dialog = new SpriteSheetDialog(addon, msg);
+        dialog.getCostumes = () => [];
+        dialog.onImport = async (spec) => {
+          if (!spec) return;
+          if (spec.tiles.length === 0 && !spec.replaceExisting) return;
+
+          const spriteName = spec.baseName || file.name.replace(/\.[^.]+$/, "");
+          const blank = JSON.stringify({
+            name: spriteName,
+            isStage: false, x: 0, y: 0, visible: true, size: 100,
+            rotationStyle: "all around", direction: 90, draggable: false,
+            currentCostume: 0, blocks: {}, variables: {},
+            costumes: [{
+              name: "costume1",
+              bitmapResolution: 1,
+              rotationCenterX: 0, rotationCenterY: 0,
+              assetId: "cd21514d0531fdffb22204e0ec5ed84a",
+              dataFormat: "svg",
+              md5ext: "cd21514d0531fdffb22204e0ec5ed84a.svg",
+            }],
+            sounds: [],
+          });
+          await vm.addSprite(blank).catch((err) => {
+            console.error("spritesheet-import: failed to create sprite", err);
+            throw err;
+          });
           // Switch to the costume tab so the user can see the imported costumes.
           addon.tab.redux.dispatch({ type: "scratch-gui/navigation/ACTIVATE_TAB", activeTabIndex: 1 });
-          handleFile(file, vm.editingTarget.id, /* removeBlankPlaceholder */ true);
-        }).catch((err) => {
-          console.error("spritesheet-import: failed to create sprite", err);
-        });
+
+          const targetId = vm.editingTarget.id;
+          const img = new Image();
+          img.src = URL.createObjectURL(file);
+          await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+          URL.revokeObjectURL(img.src);
+
+          const importer = new SpriteSheetImporter(vm, targetId);
+          try {
+            await importer.import(img, spec);
+          } catch (err) {
+            console.error("spritesheet-import: import failed", err);
+            return;
+          }
+
+          // Remove the blank placeholder costume inserted by vm.addSprite.
+          const target = vm.runtime.getTargetById(targetId);
+          if (target) {
+            const costumes = target.sprite.costumes_;
+            const blankIdx = costumes.findIndex(
+              (c) => c.assetId === "cd21514d0531fdffb22204e0ec5ed84a"
+            );
+            if (blankIdx !== -1 && costumes.length > 1) {
+              target.deleteCostume(blankIdx);
+            }
+          }
+        };
+        dialog.open(file, /* existingCostumes */ []);
       } else {
         // Costume-tab context: import into the currently editing sprite.
         // Capture target ID now to survive sprite-switching during the dialog.
         handleFile(file, vm.editingTarget?.id ?? "");
       }
     });
-
-    // Keep tooltip positioned correctly as menu opens/closes/resizes.
     const observer = new MutationObserver(() => positionTooltip(wrapper, tooltip, isRight));
     observer.observe(menu, { attributes: true, subtree: true });
     positionTooltip(wrapper, tooltip, isRight);

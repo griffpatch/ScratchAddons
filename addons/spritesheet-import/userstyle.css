@@ -122,16 +122,38 @@
 }
 
 /*
- * The canvas buffer is sized at logical-pixel dimensions × devicePixelRatio for crisp
- * HiDPI rendering. The CSS display dimensions (set via canvas.style.width/height) match
- * the zoomed image size. getBoundingClientRect() on the canvas therefore reflects the zoom,
- * so _tileAt() coordinate mapping is correct at every zoom level without any extra math.
+ * Zero-size sticky anchor: stays at the top-left corner of the scroll container's
+ * visible area as the user scrolls. The viewport canvas sits absolutely inside it,
+ * covering exactly the visible region of the wrap. This keeps the canvas bounded by
+ * the viewport rather than the (potentially enormous) zoomed image size.
+ */
+.sa-ss-canvas-sticky-anchor {
+  /*
+   * contain:layout prevents the absolutely-positioned canvas inside this anchor
+   * from extending the scroll container's scrollable overflow area. Without it,
+   * the canvas (sized to clientWidth×clientHeight) would inflate scrollHeight,
+   * triggering a ResizeObserver → scrollbar → resize → scrollbar cycle.
+   */
+  contain: layout;
+  height: 0;
+  left: 0;
+  position: sticky;
+  top: 0;
+  width: 0;
+  z-index: 1;
+}
+
+/*
+ * Viewport-sized canvas overlay. Width and height are set by JS to the scroll
+ * container's clientWidth/clientHeight × devicePixelRatio. Drawing coordinates are
+ * offset by the container's scrollLeft/scrollTop so the correct tiles are visible.
  */
 .sa-ss-overlay {
   cursor: crosshair;
   image-rendering: pixelated;
-  inset: 0;
+  left: 0;
   position: absolute;
+  top: 0;
 }
 
 /* ─── Right column: controls ─────────────────────────────────────────────── */
@@ -210,6 +232,27 @@
   font-style: italic;
   opacity: 0.75;
   width: 100%;
+}
+
+@keyframes sa-ss-spin {
+  to { transform: rotate(360deg); }
+}
+
+/*
+ * Spinner shown while the analysis worker is running. The ::before pseudo-element
+ * creates a small rotating ring that sits inline before the "Analyzing…" text.
+ */
+.sa-ss-detect-msg.sa-ss-loading::before {
+  animation: sa-ss-spin 0.6s linear infinite;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  content: '';
+  display: inline-block;
+  height: 10px;
+  margin-right: 5px;
+  vertical-align: middle;
+  width: 10px;
 }
 
 .sa-ss-detect-msg[data-confidence="high"] {

@@ -1,25 +1,34 @@
 /**
  * SpriteSheetTileGrid — canvas overlay for tile selection.
  *
- * Renders a grid over the image preview, handles click and drag-rectangle
- * selection. Tile indices are 1-based (col, row).
+ * The canvas is viewport-sized (matching the scroll container's visible area)
+ * rather than image-sized. render() reads the container's scrollLeft/scrollTop
+ * and offsets all drawing so the correct region of the tile grid is always
+ * visible regardless of zoom level or image size.
+ *
+ * Tile indices are 1-based (col, row).
  */
 export default class SpriteSheetTileGrid {
   /**
-   * @param {HTMLCanvasElement} canvas - Overlay canvas (sized to match the preview image).
+   * @param {HTMLCanvasElement} canvas - Viewport-sized overlay canvas.
+   * @param {Element} scrollContainer - The scrollable preview wrapper element.
    * @param {number} cols
    * @param {number} rows
    * @param {Set<string>} selected - Initial selected set, keys are `"col:row"`.
    * @param {Set<string>} blank - Set of tile keys that are fully transparent and unselectable.
    */
-  constructor(canvas, cols, rows, selected = new Set(), blank = new Set(), imported = new Set()) {
+  constructor(canvas, scrollContainer, cols, rows, selected = new Set(), blank = new Set(), imported = new Set()) {
     this._canvas = canvas;
     this._ctx = canvas.getContext("2d");
+    this._container = scrollContainer;
     this._cols = cols;
     this._rows = rows;
     this._selected = new Set(selected);
     this._blank = new Set(blank);
     this._imported = new Set(imported);
+    /** Full image display size in CSS px (zoom × natural size). Updated by setImageDimensions(). */
+    this._imgCssW = 1;
+    this._imgCssH = 1;
 
     /** Called with no args whenever selection changes. */
     this.onSelectionChange = null;
@@ -101,37 +110,69 @@ export default class SpriteSheetTileGrid {
     return this._cols * this._rows - this._blank.size;
   }
 
+  /**
+   * Set the full zoomed image CSS dimensions and re-render.
+   * Must be called whenever zoom changes so tile positions are correct.
+   *
+   * @param {number} w - imageWidth × zoom in CSS px
+   * @param {number} h - imageHeight × zoom in CSS px
+   */
+  setImageDimensions(w, h) {
+    this._imgCssW = w;
+    this._imgCssH = h;
+    this.render();
+  }
+
   // ─── Rendering ─────────────────────────────────────────────────────────────
 
   render() {
     const { _canvas: canvas, _ctx: ctx, _cols: cols, _rows: rows } = this;
-    // CSS display size drives all drawing; DPR scale keeps strokes/badges sharp on HiDPI.
-    const cssW = parseFloat(canvas.style.width) || canvas.width;
-    const cssH = parseFloat(canvas.style.height) || canvas.height;
-    ctx.setTransform(canvas.width / cssW, 0, 0, canvas.height / cssH, 0, 0);
+    // Canvas CSS dimensions = visible viewport of the scroll container.
+    const cssW = parseFloat(canvas.style.width) || canvas.clientWidth || canvas.width;
+    const cssH = parseFloat(canvas.style.height) || canvas.clientHeight || canvas.height;
+    if (!cssW || !cssH) return;
+    // DPR scale: buffer pixels per CSS pixel (canvas.width set by dialog on resize).
+    const dpr = canvas.width / cssW;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
 
-    const tileW = cssW / cols;
-    const tileH = cssH / rows;
+    // Tile size in the zoomed image coordinate space.
+    const tileW = this._imgCssW / cols;
+    const tileH = this._imgCssH / rows;
+    // Scroll offset: how much of the image is scrolled out of view to the top-left.
+    const scrollX = this._container.scrollLeft;
+    const scrollY = this._container.scrollTop;
 
     for (let r = 1; r <= rows; r++) {
       for (let c = 1; c <= cols; c++) {
+        // Tile position in canvas coords = image-space origin minus scroll offset.
+        const x = (c - 1) * tileW - scrollX;
+        const y = (r - 1) * tileH - scrollY;
+        // Cull tiles fully outside the viewport canvas.
+        if (x + tileW < 0 || x > cssW || y + tileH < 0 || y > cssH) continue;
         const key = `${c}:${r}`;
-        const x = (c - 1) * tileW, y = (r - 1) * tileH;
         if (this._blank.has(key)) this._renderBlankTile(ctx, x, y, tileW, tileH);
         else this._renderContentTile(ctx, x, y, tileW, tileH, this._selected.has(key), this._imported.has(key));
       }
     }
 
     // Anchor overlay drawn last so it sits on top of all tile fills and badges.
-    if (this.showAnchor) this._renderAnchorPoints(ctx, cols, rows, tileW, tileH);
+    if (this.showAnchor) this._renderAnchorPoints(ctx, cols, rows, tileW, tileH, scrollX, scrollY);
   }
 
-  /** Call fn(x, y) for the top-left corner of every non-blank tile. */
-  _forTiles(cols, rows, tileW, tileH, fn) {
-    for (let r = 1; r <= rows; r++)
-      for (let c = 1; c <= cols; c++)
-        if (!this._blank.has(`${c}:${r}`)) fn((c - 1) * tileW, (r - 1) * tileH);
+  /** Call fn(x, y) for the top-left corner of every non-blank tile visible in the viewport. */
+  _forTiles(cols, rows, tileW, tileH, scrollX, scrollY, fn) {
+    const cssW = parseFloat(this._canvas.style.width) || this._canvas.clientWidth;
+    const cssH = parseFloat(this._canvas.style.height) || this._canvas.clientHeight;
+    for (let r = 1; r <= rows; r++) {
+      for (let c = 1; c <= cols; c++) {
+        if (this._blank.has(`${c}:${r}`)) continue;
+        const x = (c - 1) * tileW - scrollX;
+        const y = (r - 1) * tileH - scrollY;
+        if (x + tileW < 0 || x > cssW || y + tileH < 0 || y > cssH) continue;
+        fn(x, y);
+      }
+    }
   }
 
   /** Hatched dark overlay for fully-transparent (unselectable) tiles. */
@@ -195,7 +236,7 @@ export default class SpriteSheetTileGrid {
    * remain legible against any sprite background colour.
    * All sizes are in fixed CSS pixels so they don't scale with zoom.
    */
-  _renderAnchorPoints(ctx, cols, rows, tileW, tileH) {
+  _renderAnchorPoints(ctx, cols, rows, tileW, tileH, scrollX, scrollY) {
     // Convert anchor from natural image pixels to CSS (zoomed) pixels.
     const ax = (this.anchorPoint.x / this.naturalTileW) * tileW;
     const ay = (this.anchorPoint.y / this.naturalTileH) * tileH;
@@ -209,7 +250,8 @@ export default class SpriteSheetTileGrid {
       for (const [color, lw, dash] of [["rgba(0,0,0,0.5)", 3, []], ["rgba(255,255,255,0.9)", 1, [4, 3]]]) {
         ctx.save();
         ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.setLineDash(dash);
-        this._forTiles(cols, rows, tileW, tileH, (x, y) => ctx.strokeRect(x + lx + .5, y + ty + .5, bw - 1, bh - 1));
+        this._forTiles(cols, rows, tileW, tileH, scrollX, scrollY,
+          (x, y) => ctx.strokeRect(x + lx + .5, y + ty + .5, bw - 1, bh - 1));
         ctx.restore();
       }
     }
@@ -220,7 +262,7 @@ export default class SpriteSheetTileGrid {
     for (const [color, lw] of [["rgba(0,0,0,0.6)", 3.5], ["rgba(255,220,0,1)", 1.5]]) {
       ctx.save();
       ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = "round";
-      this._forTiles(cols, rows, tileW, tileH, (x, y) => {
+      this._forTiles(cols, rows, tileW, tileH, scrollX, scrollY, (x, y) => {
         const ox = x + ax, oy = y + ay;
         ctx.beginPath(); ctx.arc(ox, oy, R, 0, Math.PI * 2); ctx.stroke();
         ctx.beginPath();
@@ -234,18 +276,31 @@ export default class SpriteSheetTileGrid {
     }
   }
 
-  /** Convert client coordinates to 1-based {col, row}. */
+  /**
+   * Convert client coordinates to 1-based {col, row}, or null if the click
+   * landed outside the image bounds (e.g. on empty wrap area past the edge).
+   *
+   * The canvas is sticky at (0,0) of the scroll container's viewport, so
+   * getBoundingClientRect() gives the top-left of the visible area. Adding
+   * the scroll offset converts to image-space coordinates.
+   *
+   * @returns {{col:number, row:number}|null}
+   */
   _tileAt(clientX, clientY) {
     const rect = this._canvas.getBoundingClientRect();
-    const scaleX = this._canvas.width / rect.width;
-    const scaleY = this._canvas.height / rect.height;
-    const px = (clientX - rect.left) * scaleX;
-    const py = (clientY - rect.top) * scaleY;
-    const tileW = this._canvas.width / this._cols;
-    const tileH = this._canvas.height / this._rows;
+    // Position within the visible viewport (canvas is sticky at its top-left).
+    const vpX = clientX - rect.left;
+    const vpY = clientY - rect.top;
+    // Add scroll offset to reach image-space coordinates.
+    const imgX = vpX + this._container.scrollLeft;
+    const imgY = vpY + this._container.scrollTop;
+    // Reject clicks outside the actual image area.
+    if (imgX < 0 || imgX > this._imgCssW || imgY < 0 || imgY > this._imgCssH) return null;
+    const tileW = this._imgCssW / this._cols;
+    const tileH = this._imgCssH / this._rows;
     return {
-      col: Math.max(1, Math.min(this._cols, Math.floor(px / tileW) + 1)),
-      row: Math.max(1, Math.min(this._rows, Math.floor(py / tileH) + 1)),
+      col: Math.max(1, Math.min(this._cols, Math.floor(imgX / tileW) + 1)),
+      row: Math.max(1, Math.min(this._rows, Math.floor(imgY / tileH) + 1)),
     };
   }
 
@@ -253,8 +308,10 @@ export default class SpriteSheetTileGrid {
     // Only handle left-button clicks; middle-button is reserved for pan.
     if (e.button !== 0) return;
     e.preventDefault();
-    const { col, row } = this._tileAt(e.clientX, e.clientY);
-    // Blank tiles cannot be toggled.
+    const tile = this._tileAt(e.clientX, e.clientY);
+    // Ignore clicks outside the image area or on blank tiles.
+    if (!tile) return;
+    const { col, row } = tile;
     if (this._blank.has(`${col}:${row}`)) return;
     // Target state = opposite of the clicked tile's current state.
     const targetState = !this._selected.has(`${col}:${row}`);
@@ -273,7 +330,9 @@ export default class SpriteSheetTileGrid {
   _onMouseMove(e) {
     if (!this._drag) return;
     e.preventDefault();
-    const { col, row } = this._tileAt(e.clientX, e.clientY);
+    const tile = this._tileAt(e.clientX, e.clientY);
+    if (!tile) return;
+    const { col, row } = tile;
     // Restore baseline then re-apply rectangle to current cursor position.
     this._selected = new Set(this._drag.baseline);
     this._applyDragRect(col, row);

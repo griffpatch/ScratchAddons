@@ -1,9 +1,27 @@
-import SpriteSheetAnalyzer from "./SpriteSheetAnalyzer.js";
+import { WORKER_CODE } from "./SpriteSheetWorker.js";
 import SpriteSheetImporter from "./SpriteSheetImporter.js";
 import SpriteSheetTileGrid from "./SpriteSheetTileGrid.js";
 
+/**
+ * djb2 hash over raw RGBA pixel bytes.
+ * Must stay byte-for-byte identical to the hash in SpriteSheetWorker.js so that
+ * costume hashes (computed here) can be compared against tile hashes (from worker).
+ *
+ * @param {ImageData} imageData
+ * @returns {number}
+ */
+function hashPixelData(imageData) {
+  let h = 5381;
+  const { data } = imageData;
+  for (let i = 0; i < data.length; i++) h = ((h << 5) + h + data[i]) | 0;
+  return h >>> 0;
+}
+
 /** Zoom levels available via the + / − buttons. */
 const ZOOM_STEPS = [2, 3, 4, 6, 8, 12, 16];
+
+/** Maximum number of tiles that can be imported in one operation. */
+const MAX_IMPORT_TILES = 2000;
 
 /** Persists the user's last chosen anchor across dialog opens. */
 let _lastAnchorIndex = 4;
@@ -29,8 +47,12 @@ export default class SpriteSheetDialog {
     this._msg = msg;
     this._resolve = null; // Promise resolver
     this._tileGrid = null;
-    this._analyzer = null;
-    this._img = null;
+    // Natural image dimensions — set when the image loads.
+    this._imageWidth = 0;
+    this._imageHeight = 0;
+    // Image display dimensions in CSS px at the current zoom level.
+    this._imgCssW = 0;
+    this._imgCssH = 0;
     this._cols = 1;
     this._rows = 1;
     this._tileW = 16;
@@ -40,7 +62,13 @@ export default class SpriteSheetDialog {
     this._showAnchor = false;
     this._zoom = 1;
     this._midDrag = null;
-    /** @type {Set<number> | null} djb2 hashes of existing costume pixel data; null while decoding. */
+    // Pixel analysis worker — created per dialog open, terminated on close.
+    this._worker = null;
+    this._workerSeq = 0; // sequence number to discard stale classify responses
+    /** @type {Map<string,number>|null} Tile-key → djb2 hash from worker; null until ready. */
+    this._tileHashes = null;
+    this._resizeObserver = null;
+    /** @type {Set<number>|null} djb2 hashes of existing costume pixel data; null while decoding. */
     this._costumeHashes = null;
   }
 
@@ -156,8 +184,15 @@ export default class SpriteSheetDialog {
     this._overlayCanvas = Object.assign(document.createElement("canvas"), {
       className: "sa-ss-overlay",
     });
-    this._previewInner.append(this._previewImg, this._overlayCanvas);
-    this._previewWrap.append(this._previewInner);
+    // The canvas anchor is a zero-size sticky element so the canvas stays at the
+    // top-left of the scroll container's visible area regardless of scroll position.
+    // The image itself lives in _previewInner (inline-block) which drives scroll dimensions.
+    const canvasAnchor = Object.assign(document.createElement("div"), {
+      className: "sa-ss-canvas-sticky-anchor",
+    });
+    canvasAnchor.append(this._overlayCanvas);
+    this._previewInner.append(this._previewImg);
+    this._previewWrap.append(canvasAnchor, this._previewInner);
 
     previewCol.append(zoomBar, this._previewWrap);
 
@@ -182,7 +217,7 @@ export default class SpriteSheetDialog {
     this._tileWInput = Object.assign(document.createElement("input"), {
       type: "number",
       className: "sa-ss-spinner",
-      min: "1",
+      min: "8",
       max: "2048",
       value: "16",
     });
@@ -196,7 +231,7 @@ export default class SpriteSheetDialog {
     this._tileHInput = Object.assign(document.createElement("input"), {
       type: "number",
       className: "sa-ss-spinner",
-      min: "1",
+      min: "8",
       max: "2048",
       value: "16",
     });
@@ -359,6 +394,8 @@ export default class SpriteSheetDialog {
       if (e.target === this._backdrop) this._cancel();
     });
     this._importBtn.addEventListener("click", () => void this._confirm());
+    this._onKeyDown = (e) => { if (e.key === "Escape") this._cancel(); };
+    document.addEventListener("keydown", this._onKeyDown);
     this._autoDetectBtn.addEventListener("click", () => this._runAutoDetect());
     this._selectAllBtn.addEventListener("click", () => this._tileGrid?.selectAll());
     this._clearAllBtn.addEventListener("click", () => this._tileGrid?.clearAll());
@@ -380,13 +417,18 @@ export default class SpriteSheetDialog {
     this._zoomOutBtn.addEventListener("click", () => this._zoomOut());
     this._zoomResetBtn.addEventListener("click", () => this._setZoom(2));
 
-    // Middle-button pan on the preview wrap
+    // Middle-button pan on the preview wrap.
+    // mousemove and mouseup are attached to document while dragging so panning
+    // continues even when the pointer leaves the wrap.
     this._previewWrap.addEventListener("mousedown", (e) => this._onWrapMouseDown(e));
-    this._previewWrap.addEventListener("mousemove", (e) => this._onWrapMouseMove(e));
-    this._previewWrap.addEventListener("mouseup", (e) => this._onWrapMouseUp(e));
     this._previewWrap.addEventListener("mouseleave", () => this._onWrapMouseLeave());
     // Wheel-to-zoom (intercept before the browser can scroll the wrap).
     this._previewWrap.addEventListener("wheel", (e) => this._onWrapWheel(e), { passive: false });
+    // Re-render the viewport canvas whenever the user scrolls the image.
+    this._previewWrap.addEventListener("scroll", () => this._tileGrid?.render());
+    // Resize the viewport canvas whenever the dialog or preview area changes size.
+    this._resizeObserver = new ResizeObserver(() => this._resizeCanvas());
+    this._resizeObserver.observe(this._previewWrap);
 
     // Load image and initialize
     this._loadImage(file);
@@ -400,62 +442,133 @@ export default class SpriteSheetDialog {
 
     this._previewImg.onload = () => {
       URL.revokeObjectURL(url);
-      this._img = this._previewImg;
-      this._analyzer = new SpriteSheetAnalyzer(this._img);
-      // Pick ×2 if the image fits in the available preview area, else ×1.
-      // We defer one frame so the preview wrap has been laid out and its
-      // clientWidth/clientHeight reflect the actual available space.
+      this._imageWidth = this._previewImg.naturalWidth;
+      this._imageHeight = this._previewImg.naturalHeight;
+      // Set zoom immediately (natural dimensions known, no pixel data needed) so
+      // the preview image displays at the right size while the worker initialises.
+      // Defer one frame so the wrap has been laid out and clientWidth is accurate.
       requestAnimationFrame(() => {
         const w = this._previewWrap.clientWidth;
         const h = this._previewWrap.clientHeight;
-        const naturalW = this._analyzer.imageWidth;
-        const naturalH = this._analyzer.imageHeight;
-        // Minimum zoom is ×2; go to ×4 if it fits, otherwise ×2.
-        const zoom = naturalW * 4 <= w && naturalH * 4 <= h ? 4 : 2;
+        const zoom = this._imageWidth * 4 <= w && this._imageHeight * 4 <= h ? 4 : 2;
         this._setZoom(zoom);
-        this._runAutoDetect();
-        this._runDetectPadding();
       });
+      // Transfer the image to the worker as a bitmap for off-thread pixel analysis.
+      this._startWorker();
     };
     this._previewImg.src = url;
   }
 
-  // ─── Auto-detect ────────────────────────────────────────────────────────────
+  /**
+   * Create the analysis worker, transfer the image bitmap, and wire the response handler.
+   * The worker runs detectGrid, detectPadding, and classifyTiles entirely off-thread.
+   */
+  async _startWorker() {
+    // createImageBitmap creates a GPU-backed copy; transferring it hands sole
+    // ownership to the worker so the main thread holds no CPU pixel buffer.
+    const t0 = performance.now();
+    const bitmap = await createImageBitmap(this._previewImg);
+    console.log(`[spritesheet-import] createImageBitmap ${(performance.now()-t0).toFixed(0)}ms`);
+    // Guard: dialog may have been closed while we awaited.
+    if (!this._resolve) { bitmap.close(); return; }
+    const blob = new Blob([WORKER_CODE], { type: "application/javascript" });
+    const workerUrl = URL.createObjectURL(blob);
+    this._worker = new Worker(workerUrl);
+    URL.revokeObjectURL(workerUrl);
+    this._worker.onmessage = (e) => this._onWorkerMessage(e.data);
+    this._worker.onerror = (err) => console.error("spritesheet-import: worker error", err);
+    this._worker.postMessage({ type: "init", bitmap }, [bitmap]);
+    // Show spinner immediately — worker result is async.
+    this._setAnalyzing(true, this._msg("analyzing"));
+  }
+
+  /** Handle messages from the analysis worker. */
+  _onWorkerMessage(data) {
+    if (data.type === "ready") {
+      const { candidates, padding, blank, hashes } = data;
+      this._tileHashes = new Map(Object.entries(hashes));
+      // Apply uniform padding (min of all sides — anchor grid only supports symmetric inset).
+      const uniform = Math.min(padding.left, padding.top, padding.right, padding.bottom);
+      this._padding = uniform;
+      this._paddingInput.value = String(uniform);
+      // Populate the grid with the best candidate from the detector.
+      // If confidence is low, fall back to 32×32 (clamped to image dimensions)
+      // rather than showing a nonsensical auto-detected grid.
+      let best = candidates[0];
+      if (best.confidence === 'low') {
+        const fallbackW = 32, fallbackH = 32;
+        const fallbackCols = Math.max(1, Math.floor(this._imageWidth / fallbackW));
+        const fallbackRows = Math.max(1, Math.floor(this._imageHeight / fallbackH));
+        // Find a classified candidate matching these dimensions, or use a stub.
+        best = candidates.find(c => c.cols === fallbackCols && c.rows === fallbackRows)
+          ?? { cols: fallbackCols, rows: fallbackRows, confidence: 'low' };
+      }
+      this._applyGridData(best.cols, best.rows, new Set(blank));
+      this._setAnalyzing(false, this._msg(`auto-detect-${best.confidence}`), best.confidence);
+      this._updateAnchorOverlay();
+    } else if (data.type === "classified") {
+      if (data.seq !== this._workerSeq) return; // stale — user changed grid again before this arrived
+      this._tileHashes = new Map(Object.entries(data.hashes));
+      this._setAnalyzing(false);
+      this._applyGridData(this._cols, this._rows, new Set(data.blank));
+    }
+  }
+
+  /** Resize the viewport canvas to match the current scroll-container size and re-render. */
+  _resizeCanvas() {
+    const wrap = this._previewWrap;
+    const dpr = devicePixelRatio ?? 1;
+    const cssW = wrap.clientWidth;
+    const cssH = wrap.clientHeight;
+    if (!cssW || !cssH) return;
+    this._overlayCanvas.width = Math.round(cssW * dpr);
+    this._overlayCanvas.height = Math.round(cssH * dpr);
+    this._overlayCanvas.style.width = `${cssW}px`;
+    this._overlayCanvas.style.height = `${cssH}px`;
+    this._tileGrid?.render();
+  }
+  /**
+   * Show or hide the analysis spinner in the auto-detect message area.
+   *
+   * @param {boolean} loading
+   * @param {string} [text] - Text to display alongside or replacing the spinner.
+   * @param {string} [confidence] - Confidence level for colour coding ('high'|'medium'|'low').
+   */
+  _setAnalyzing(loading, text = "", confidence = "") {
+    this._detectMsg.classList.toggle("sa-ss-loading", loading);
+    this._detectMsg.textContent = text;
+    if (confidence) {
+      this._detectMsg.dataset.confidence = confidence;
+    } else {
+      delete this._detectMsg.dataset.confidence;
+    }
+  }
+  // ─── Auto-detect (now delegated to worker on open) ───────────────────────────────────
 
   _runAutoDetect() {
-    if (!this._analyzer) return;
-    const candidates = this._analyzer.detectGrid();
-    const best = candidates[0];
-    this._applyGrid(best.cols, best.rows);
-    this._detectMsg.textContent = this._msg(`auto-detect-${best.confidence}`);
-    this._detectMsg.dataset.confidence = best.confidence;
+    // Detection runs in the worker on open. Button is wired but no-ops —
+    // forward-compatible placeholder in case we add a re-detect path later.
   }
 
   _runDetectPadding() {
-    if (!this._analyzer) return;
-    const p = this._analyzer.detectPadding(this._cols, this._rows);
-    // Use the minimum of the four sides as a single symmetric padding value,
-    // since the anchor grid only supports one uniform inset.
-    const uniform = Math.min(p.left, p.top, p.right, p.bottom);
-    this._padding = uniform;
-    this._paddingInput.value = String(uniform);
-    this._updateAnchorOverlay();
+    // Padding detection runs in the worker on open.
   }
 
-  // ─── Grid management ────────────────────────────────────────────────────────
+  // ─── Grid management ─────────────────────────────────────────────────────────────────
 
   _onGridInputChange() {
-    if (!this._analyzer) return;
-    const tileW = Math.max(1, parseInt(this._tileWInput.value, 10) || 1);
-    const tileH = Math.max(1, parseInt(this._tileHInput.value, 10) || 1);
-    const cols = Math.max(1, Math.floor(this._analyzer.imageWidth / tileW));
-    const rows = Math.max(1, Math.floor(this._analyzer.imageHeight / tileH));
+    if (!this._imageWidth) return;
+    const tileW = Math.max(8, parseInt(this._tileWInput.value, 10) || 8);
+    const tileH = Math.max(8, parseInt(this._tileHInput.value, 10) || 8);
+    const cols = Math.max(1, Math.floor(this._imageWidth / tileW));
+    const rows = Math.max(1, Math.floor(this._imageHeight / tileH));
     this._applyGrid(cols, rows);
     this._detectMsg.textContent = "";
   }
 
   /**
-   * Re-compute blank tiles and rebuild the tile grid for the given dimensions.
+   * Ask the worker to classify a new grid layout.
+   * The result comes back asynchronously via _onWorkerMessage.
    *
    * @param {number} cols
    * @param {number} rows
@@ -463,43 +576,64 @@ export default class SpriteSheetDialog {
   _applyGrid(cols, rows) {
     this._cols = cols;
     this._rows = rows;
-    if (this._analyzer) {
-      this._tileW = Math.floor(this._analyzer.imageWidth / cols);
-      this._tileH = Math.floor(this._analyzer.imageHeight / rows);
+    if (this._imageWidth) {
+      this._tileW = Math.floor(this._imageWidth / cols);
+      this._tileH = Math.floor(this._imageHeight / rows);
+      this._tileWInput.value = String(this._tileW);
+      this._tileHInput.value = String(this._tileH);
+    }
+    this._workerSeq++;
+    this._worker?.postMessage({ type: "classify", cols, rows, seq: this._workerSeq });
+    if (this._worker) this._setAnalyzing(true, this._msg("analyzing"));
+    // If worker data not yet available, show a blank grid until the response arrives.
+    if (!this._tileHashes) {
+      this._applyGridData(cols, rows, new Set());
+    }
+    this._updateImportButton();
+    this._updateAnchorOverlay();
+  }
+
+  /**
+   * Apply a classified grid (blank set + selection state) from a worker response.
+   * Also recomputes the imported-tile highlights from the current costume hashes.
+   *
+   * @param {number} cols
+   * @param {number} rows
+   * @param {Set<string>} blank - Tile keys that are fully transparent.
+   */
+  _applyGridData(cols, rows, blank) {
+    this._cols = cols;
+    this._rows = rows;
+    if (this._imageWidth) {
+      this._tileW = Math.floor(this._imageWidth / cols);
+      this._tileH = Math.floor(this._imageHeight / rows);
       this._tileWInput.value = String(this._tileW);
       this._tileHInput.value = String(this._tileH);
     }
 
-    // Compute which tiles are blank (fully transparent).
-    const blank = new Set();
+    // All non-blank tiles start selected.
     const selected = new Set();
-    if (this._analyzer) {
-      for (let r = 1; r <= rows; r++) {
-        for (let c = 1; c <= cols; c++) {
-          const key = `${c}:${r}`;
-          const tileData = this._analyzer.getTileImageData(c, r, cols, rows);
-          if (this._analyzer.isTileBlank(tileData)) {
-            blank.add(key);
-          } else {
-            selected.add(key);
-          }
-        }
+    for (let r = 1; r <= rows; r++) {
+      for (let c = 1; c <= cols; c++) {
+        if (!blank.has(`${c}:${r}`)) selected.add(`${c}:${r}`);
       }
     }
 
-    const imported = this._computeImported(cols, rows);
+    const imported = this._computeImported();
 
     if (this._tileGrid) {
       this._tileGrid.setGrid(cols, rows, selected, blank, imported);
     } else {
       this._tileGrid = new SpriteSheetTileGrid(
         this._overlayCanvas,
+        this._previewWrap,
         cols,
         rows,
         selected,
         blank,
         imported
       );
+      this._tileGrid.setImageDimensions(this._imgCssW, this._imgCssH);
       this._tileGrid.onSelectionChange = () => this._updateImportButton();
     }
 
@@ -540,8 +674,7 @@ export default class SpriteSheetDialog {
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(bitmap, 0, 0, bw, bh, 0, 0, compareW, compareH);
         bitmap.close();
-        const imageData = ctx.getImageData(0, 0, compareW, compareH);
-        hashes.add(SpriteSheetAnalyzer.hashImageData(imageData));
+        hashes.add(hashPixelData(ctx.getImageData(0, 0, compareW, compareH)));
       } catch {
         // skip undecoded costumes silently
       }
@@ -551,23 +684,18 @@ export default class SpriteSheetDialog {
   }
 
   /**
-   * Return the set of tile keys ("col:row") whose pixel content exactly matches
-   * a costume already on the sprite (by djb2 hash of raw RGBA pixel data).
-   * Returns an empty set if costume decoding has not finished yet.
+   * Return the set of tile keys whose pixel content matches a costume already on
+   * the sprite, using djb2 hashes supplied by the worker.
+   * Returns an empty set if the worker hasn't responded yet or costume decoding
+   * hasn't finished yet.
    *
-   * @param {number} [cols]
-   * @param {number} [rows]
    * @returns {Set<string>}
    */
-  _computeImported(cols = this._cols, rows = this._rows) {
-    if (!this._costumeHashes || !this._analyzer) return new Set();
+  _computeImported() {
+    if (!this._costumeHashes || !this._tileHashes) return new Set();
     const imported = new Set();
-    for (let r = 1; r <= rows; r++) {
-      for (let c = 1; c <= cols; c++) {
-        const tileData = this._analyzer.getTileImageData(c, r, cols, rows);
-        const h = SpriteSheetAnalyzer.hashImageData(tileData);
-        if (this._costumeHashes.has(h)) imported.add(`${c}:${r}`);
-      }
+    for (const [key, hash] of this._tileHashes) {
+      if (this._costumeHashes.has(hash)) imported.add(key);
     }
     return imported;
   }
@@ -616,32 +744,27 @@ export default class SpriteSheetDialog {
   // ─── Zoom ────────────────────────────────────────────────────────────────────
 
   /**
-   * Set the zoom level and update the image/canvas CSS dimensions accordingly.
-   * The overlay canvas buffer (in pixels) stays fixed at natural image size;
-   * only its CSS display size changes, so _tileAt() (getBoundingClientRect) is
-   * automatically correct at every zoom level.
+   * Set the zoom level. Updates the image/inner CSS size (which drives the scrollbars)
+   * and resizes the viewport canvas to match the wrap's current visible area.
    *
    * @param {number} factor
    */
   _setZoom(factor) {
     this._zoom = factor;
-    if (!this._analyzer) return;
-    const w = Math.round(this._analyzer.imageWidth * factor);
-    const h = Math.round(this._analyzer.imageHeight * factor);
-    const dpr = devicePixelRatio ?? 1;
-    // Size the canvas buffer at physical-pixel resolution for crisp rendering on HiDPI screens.
-    // The explicit CSS size keeps the canvas at w × h logical pixels; the DPR scale is transparent
-    // to all drawing code (render() applies ctx.setTransform to account for it).
-    this._overlayCanvas.width = Math.round(w * dpr);
-    this._overlayCanvas.height = Math.round(h * dpr);
-    this._overlayCanvas.style.width = `${w}px`;
-    this._overlayCanvas.style.height = `${h}px`;
+    if (!this._imageWidth) return;
+    const w = Math.round(this._imageWidth * factor);
+    const h = Math.round(this._imageHeight * factor);
+    this._imgCssW = w;
+    this._imgCssH = h;
     this._previewImg.style.width = `${w}px`;
     this._previewImg.style.height = `${h}px`;
     this._previewInner.style.width = `${w}px`;
     this._previewInner.style.height = `${h}px`;
     this._zoomLabel.textContent = `${Math.round(factor * 100)}%`;
-    this._tileGrid?.render();
+    // Notify the tile grid of the new image CSS dimensions so tile positions are correct.
+    this._tileGrid?.setImageDimensions(w, h);
+    // Resize the viewport canvas to the wrap's current visible area and re-render.
+    this._resizeCanvas();
   }
 
   _zoomIn() {
@@ -683,24 +806,34 @@ export default class SpriteSheetDialog {
       scrollTop: this._previewWrap.scrollTop,
     };
     this._previewWrap.classList.add("sa-ss-panning");
+    // Attach move/up to document so panning continues outside the wrap.
+    this._midDragMove = (e) => this._onDocMouseMove(e);
+    this._midDragUp = (e) => this._onDocMouseUp(e);
+    document.addEventListener("mousemove", this._midDragMove);
+    document.addEventListener("mouseup", this._midDragUp);
   }
 
-  _onWrapMouseMove(e) {
+  _onDocMouseMove(e) {
     if (!this._midDrag) return;
     e.preventDefault();
     this._previewWrap.scrollLeft = this._midDrag.scrollLeft - (e.clientX - this._midDrag.startX);
     this._previewWrap.scrollTop = this._midDrag.scrollTop - (e.clientY - this._midDrag.startY);
   }
 
-  _onWrapMouseUp(e) {
+  _onDocMouseUp(e) {
     if (e.button !== 1 || !this._midDrag) return;
     this._midDrag = null;
     this._previewWrap.classList.remove("sa-ss-panning");
+    document.removeEventListener("mousemove", this._midDragMove);
+    document.removeEventListener("mouseup", this._midDragUp);
+    this._midDragMove = null;
+    this._midDragUp = null;
   }
 
   _onWrapMouseLeave() {
+    // Keep the grab cursor only while the pointer is inside the wrap.
+    // Panning itself continues via the document-level listeners.
     if (this._midDrag) {
-      this._midDrag = null;
       this._previewWrap.classList.remove("sa-ss-panning");
     }
   }
@@ -711,7 +844,11 @@ export default class SpriteSheetDialog {
     const count = this._tileGrid?.selectedCount ?? 0;
     const total = this._tileGrid?.totalCount ?? 0;
     const replacing = this._replaceCheckbox?.checked ?? false;
-    if (replacing) {
+    const tooMany = count > MAX_IMPORT_TILES;
+    if (tooMany) {
+      this._importBtn.textContent = this._msg("too-many-tiles", { count, max: MAX_IMPORT_TILES });
+      this._importBtn.disabled = true;
+    } else if (replacing) {
       this._importBtn.textContent =
         count > 0
           ? this._msg("replace-button", { count })
@@ -784,10 +921,18 @@ export default class SpriteSheetDialog {
 
   _close() {
     this._backdrop.remove();
+    this._resizeObserver?.disconnect();
+    this._worker?.terminate();
+    if (this._onKeyDown) document.removeEventListener("keydown", this._onKeyDown);
+    // Clean up any in-flight document-level pan listeners.
+    if (this._midDragMove) document.removeEventListener("mousemove", this._midDragMove);
+    if (this._midDragUp) document.removeEventListener("mouseup", this._midDragUp);
     this._tileGrid = null;
-    this._analyzer = null;
-    this._img = null;
+    this._worker = null;
     this._midDrag = null;
+    this._midDragMove = null;
+    this._midDragUp = null;
+    this._onKeyDown = null;
     this._resolve = null;
   }
 }
