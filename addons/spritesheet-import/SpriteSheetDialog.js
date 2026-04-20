@@ -114,7 +114,19 @@ export default class SpriteSheetDialog {
       textContent: "⟳",
       title: "Reset zoom (100%)",
     });
-    zoomBar.append(this._zoomOutBtn, this._zoomLabel, this._zoomInBtn, this._zoomResetBtn);
+    // Divider between zoom and selection controls
+    const zoomDivider = Object.assign(document.createElement("span"), {
+      className: "sa-ss-toolbar-divider",
+    });
+    this._selectAllBtn = Object.assign(document.createElement("button"), {
+      className: "sa-ss-btn sa-ss-btn-secondary sa-ss-zoom-btn",
+      textContent: msg("select-all"),
+    });
+    this._clearAllBtn = Object.assign(document.createElement("button"), {
+      className: "sa-ss-btn sa-ss-btn-secondary sa-ss-zoom-btn",
+      textContent: msg("clear-all"),
+    });
+    zoomBar.append(this._zoomOutBtn, this._zoomLabel, this._zoomInBtn, this._zoomResetBtn, zoomDivider, this._selectAllBtn, this._clearAllBtn);
 
     // Preview area: scrollable wrap → inner div (inline-block at zoom size) → img + canvas
     this._previewWrap = Object.assign(document.createElement("div"), {
@@ -188,22 +200,6 @@ export default class SpriteSheetDialog {
 
     gridControls.append(tileWLabel, tileHLabel, this._autoDetectBtn, this._detectMsg);
 
-    // Selection controls
-    const selControls = Object.assign(document.createElement("div"), {
-      className: "sa-ss-sel-controls",
-    });
-
-    this._selectAllBtn = Object.assign(document.createElement("button"), {
-      className: "sa-ss-btn sa-ss-btn-secondary",
-      textContent: msg("select-all"),
-    });
-    this._clearAllBtn = Object.assign(document.createElement("button"), {
-      className: "sa-ss-btn sa-ss-btn-secondary",
-      textContent: msg("clear-all"),
-    });
-
-    selControls.append(this._selectAllBtn, this._clearAllBtn);
-
     // Costume name
     const nameRow = Object.assign(document.createElement("div"), {
       className: "sa-ss-name-row",
@@ -261,7 +257,7 @@ export default class SpriteSheetDialog {
     anchorRow.append(this._anchorGrid);
     this._setAnchor(this._anchorIndex);
 
-    controlsCol.append(gridControls, selControls, nameRow, replaceRow, anchorRow);
+    controlsCol.append(gridControls, nameRow, replaceRow, anchorRow);
 
     // ── Body (two-column) ─────────────────────────────────────────────────────
     const body = Object.assign(document.createElement("div"), {
@@ -425,29 +421,46 @@ export default class SpriteSheetDialog {
    * @param {object[]} costumes - VM costume objects.
    */
   async _decodeCostumes(costumes) {
+    console.log(`[spritesheet] _decodeCostumes: ${costumes.length} costumes`);
     const hashes = new Set();
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
     for (const costume of costumes) {
       const bytes = costume.asset?.data;
-      if (!bytes) continue;
+      if (!bytes) {
+        console.log(`[spritesheet]   skip "${costume.name}": no asset.data (dataFormat=${costume.dataFormat})`);
+        continue;
+      }
       try {
         const mime = costume.dataFormat === "svg" ? "image/svg+xml" : "image/png";
         const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-        ctx.clearRect(0, 0, bitmap.width, bitmap.height);
-        ctx.drawImage(bitmap, 0, 0);
+        // Read dimensions BEFORE close()
+        const bw = bitmap.width, bh = bitmap.height;
+        // Scratch stores bitmap costumes at bitmapResolution× (typically 2×) for HiDPI.
+        // Normalise back to logical pixels so the hash matches the tile ImageData.
+        const res = costume.bitmapResolution ?? 1;
+        const compareW = Math.round(bw / res);
+        const compareH = Math.round(bh / res);
+        canvas.width = compareW;
+        canvas.height = compareH;
+        ctx.clearRect(0, 0, compareW, compareH);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(bitmap, 0, 0, bw, bh, 0, 0, compareW, compareH);
         bitmap.close();
-        hashes.add(
-          SpriteSheetAnalyzer.hashImageData(ctx.getImageData(0, 0, canvas.width, canvas.height))
+        const imageData = ctx.getImageData(0, 0, compareW, compareH);
+        const h = SpriteSheetAnalyzer.hashImageData(imageData);
+        console.log(
+          `[spritesheet]   costume "${costume.name}"  stored=${bw}x${bh}  logical=${compareW}x${compareH}` +
+          `  bitmapResolution=${res}  hash=${h}`
         );
-      } catch {
-        // Skip costumes that cannot be decoded (e.g., corrupt assets).
+        hashes.add(h);
+      } catch (err) {
+        console.warn(`[spritesheet]   skip "${costume.name}": decode failed`, err);
       }
     }
 
+    console.log(`[spritesheet] _decodeCostumes done: ${hashes.size} hashes`, [...hashes]);
     this._costumeHashes = hashes;
   }
 
@@ -461,16 +474,27 @@ export default class SpriteSheetDialog {
    * @returns {Set<string>}
    */
   _computeImported(cols = this._cols, rows = this._rows) {
-    if (!this._costumeHashes || !this._analyzer) return new Set();
+    if (!this._costumeHashes || !this._analyzer) {
+      console.log(`[spritesheet] _computeImported: skipped (hashes=${this._costumeHashes === null ? 'null' : 'pending'}, analyzer=${!!this._analyzer})`);
+      return new Set();
+    }
     const imported = new Set();
+    // Log tile 1:1 detail only
+    const tileData11 = this._analyzer.getTileImageData(1, 1, cols, rows);
+    const hash11 = SpriteSheetAnalyzer.hashImageData(tileData11);
+    console.log(
+      `[spritesheet] tile 1:1  size=${tileData11.width}x${tileData11.height}  hash=${hash11}` +
+      `  match=${this._costumeHashes.has(hash11)}`
+    );
+
     for (let r = 1; r <= rows; r++) {
       for (let c = 1; c <= cols; c++) {
         const tileData = this._analyzer.getTileImageData(c, r, cols, rows);
-        if (this._costumeHashes.has(SpriteSheetAnalyzer.hashImageData(tileData))) {
-          imported.add(`${c}:${r}`);
-        }
+        const h = SpriteSheetAnalyzer.hashImageData(tileData);
+        if (this._costumeHashes.has(h)) imported.add(`${c}:${r}`);
       }
     }
+    console.log(`[spritesheet] _computeImported: ${imported.size} matched of ${cols * rows} tiles`);
     return imported;
   }
 

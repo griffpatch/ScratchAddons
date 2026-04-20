@@ -133,38 +133,42 @@ export default class SpriteSheetTileGrid {
 
   /** Draw a selected or unselected content tile. Imported tiles (already in sprite) are green. */
   _renderContentTile(ctx, x, y, w, h, isSelected, isImported) {
-    // Fill
+    // Fill — imported tiles always show green tint; selection adds blue on top
     if (isImported) {
-      ctx.fillStyle = isSelected ? "rgba(0, 160, 80, 0.35)" : "rgba(0, 160, 80, 0.15)";
+      ctx.fillStyle = isSelected ? "rgba(0, 160, 80, 0.32)" : "rgba(0, 160, 80, 0.14)";
     } else {
       ctx.fillStyle = isSelected ? "rgba(0, 100, 255, 0.25)" : "rgba(0, 0, 0, 0.35)";
     }
     ctx.fillRect(x, y, w, h);
 
-    // Border
-    ctx.strokeStyle = isImported
-      ? isSelected ? "rgba(0, 210, 100, 0.95)" : "rgba(0, 160, 80, 0.75)"
-      : isSelected ? "rgba(0, 100, 255, 0.9)" : "rgba(180, 180, 180, 0.6)";
-    ctx.lineWidth = 1;
+    // Border — imported tiles always get green border regardless of selection
+    if (isImported) {
+      ctx.strokeStyle = isSelected ? "rgba(0, 210, 100, 0.95)" : "rgba(0, 180, 90, 0.85)";
+      ctx.lineWidth = isSelected ? 1.5 : 1.5;
+    } else {
+      ctx.strokeStyle = isSelected ? "rgba(0, 100, 255, 0.9)" : "rgba(180, 180, 180, 0.6)";
+      ctx.lineWidth = 1;
+    }
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
-    // Label (only if large enough to be legible)
-    if (w >= 16 && h >= 16) {
-      if (isSelected) {
-        // Checkmark for selected tiles.
-        ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-        ctx.font = `${Math.min(w, h) * 0.45}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("✓", x + w / 2, y + h / 2);
-      } else if (isImported) {
-        // Small indicator for unselected-but-already-imported tiles.
-        ctx.fillStyle = "rgba(0, 160, 80, 0.85)";
-        ctx.font = `${Math.min(w, h) * 0.3}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("•", x + w / 2, y + h / 2);
-      }
+    // Checkmark icon for selected tiles (drawn as path, not text, for crispness)
+    if (isSelected && w >= 10 && h >= 10) {
+      const s = Math.min(w, h);
+      const cx = x + w / 2;
+      const cy = y + h / 2;
+      // Scale checkmark to ~50% of tile dimension
+      const arm = s * 0.22;
+      ctx.save();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+      ctx.lineWidth = Math.max(1, s * 0.085);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(cx - arm, cy);
+      ctx.lineTo(cx - arm * 0.1, cy + arm * 0.85);
+      ctx.lineTo(cx + arm * 1.1, cy - arm * 0.85);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 

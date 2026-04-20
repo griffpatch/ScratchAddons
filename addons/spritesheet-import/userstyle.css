@@ -63,6 +63,13 @@
   gap: 4px;
 }
 
+.sa-ss-toolbar-divider {
+  background: var(--ui-border, #ddd);
+  height: 18px;
+  margin: 0 4px;
+  width: 1px;
+}
+
 .sa-ss-zoom-btn {
   font-size: 1rem;
   line-height: 1;
@@ -132,14 +139,12 @@
 
 /* ─── Controls rows ──────────────────────────────────────────────────────── */
 
-.sa-ss-grid-controls,
-.sa-ss-sel-controls {
+.sa-ss-grid-controls {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
-
 .sa-ss-spinner-label {
   align-items: center;
   display: flex;
