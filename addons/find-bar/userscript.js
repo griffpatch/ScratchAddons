@@ -1468,6 +1468,12 @@ export default async function ({ addon, msg, console }) {
         this.carousel.build(item, blocks, instanceBlock);
       } else if (cls === "define") {
         let blocks = this.getCallsToProcedureById(item.data.labelID);
+        if (!instanceBlock) {
+          // Default to the definition block itself so the carousel starts there, not at the first call.
+          // item.data.labelID is the definition block's ID and it is always present in the blocks array.
+          const defId = item.data.labelID;
+          instanceBlock = blocks.find((b) => (b.id || b.getId?.()) === defId) || null;
+        }
         this.carousel.build(item, blocks, instanceBlock);
       } else if (cls === "broadcast") {
         let blocks = this.getBroadcastBlocks(item.data.eventName, searchAllSprites);
@@ -1731,7 +1737,6 @@ export default async function ({ addon, msg, console }) {
             }
           }
         }
-
         this.createDom(item);
 
         if (this.idx < this.blocks.length) {
