@@ -679,25 +679,34 @@ class TokenTypeBlock extends TokenType {
           case BlockInputType.ENUM:
             fullTokenProvider = new TokenTypeStringEnum(blockPart.values);
             if (blockPart.isRound) {
-              const enumGroup = new TokenProviderGroup();
-              enumGroup.pushProviders([fullTokenProvider, querier.tokenGroupRoundBlocks]);
-              fullTokenProvider = enumGroup;
+              if (querier.maxDepth < Infinity) {
+                // Top-level-only mode: use enum values + blank, but no reporters.
+                // Using reporters here would call tokenGroupRoundBlocks as a sub-input (depth >= 1),
+                // which would poison its shared cache before it is searched as a root block (depth 0),
+                // causing all reporters to vanish from results.
+                fullTokenProvider = new TokenProviderOptional(fullTokenProvider);
+              } else {
+                const enumGroup = new TokenProviderGroup();
+                enumGroup.pushProviders([fullTokenProvider, querier.tokenGroupRoundBlocks]);
+                fullTokenProvider = enumGroup;
+              }
             }
             break;
           case BlockInputType.STRING:
-            fullTokenProvider = querier.tokenGroupString;
+            // In top-level-only mode, use blank so typed text doesn't fill inputs.
+            fullTokenProvider = querier.maxDepth < Infinity ? TokenTypeBlank.INSTANCE : querier.tokenGroupString;
             break;
           case BlockInputType.NUMBER:
-            fullTokenProvider = querier.tokenGroupNumber;
+            fullTokenProvider = querier.maxDepth < Infinity ? TokenTypeBlank.INSTANCE : querier.tokenGroupNumber;
             break;
           case BlockInputType.COLOUR:
             fullTokenProvider = TokenTypeColor.INSTANCE;
             break;
           case BlockInputType.BOOLEAN:
-            fullTokenProvider = querier.tokenGroupBoolean;
+            fullTokenProvider = querier.maxDepth < Infinity ? TokenTypeBlank.INSTANCE : querier.tokenGroupBoolean;
             break;
           case BlockInputType.BLOCK:
-            fullTokenProvider = querier.tokenGroupStack;
+            fullTokenProvider = querier.maxDepth < Infinity ? TokenTypeBlank.INSTANCE : querier.tokenGroupStack;
             break;
         }
       }
@@ -788,7 +797,7 @@ class TokenTypeBlock extends TokenType {
 
     let yieldedTokens = false;
 
-    for (const subtokens of this._parseSubtokens(query, idx, this.fullTokenProviders)) {
+    for (const subtokens of this._parseSubtokens(query, idx, this.fullTokenProviders, depth)) {
       let token = this._createToken(query, idx, this.fullTokenProviders, subtokens);
       if (token) {
         yield token;
@@ -925,7 +934,10 @@ class TokenTypeBlock extends TokenType {
         }
       }
 
-      if (!parseNextToken || !token.isLegal || tokenProviderIdx === subtokenProviders.length - 1) {
+      // Always recurse past a blank token — it's a zero-width filler that consumes nothing,
+      // so a truncated preceding token shouldn't prevent later providers (like a list enum) from being visited.
+      const forceRecurse = token.type === TokenTypeBlank.INSTANCE;
+      if ((!parseNextToken && !forceRecurse) || !token.isLegal || tokenProviderIdx === subtokenProviders.length - 1) {
         yield [token];
       } else {
         for (const subTokenArr of this._parseSubtokens(
@@ -1203,6 +1215,14 @@ export default class WorkspaceQuerier {
    * The maximum number of tokens to find before giving up.
    */
   static MAX_TOKENS = 100000;
+
+  /**
+   * The maximum block nesting depth for query results.
+   * Set to 1 to return only top-level blocks with empty inputs (no sub-blocks or text literals).
+   * Set to Infinity (the default) for unrestricted nesting.
+   * @type {number}
+   */
+  maxDepth = Infinity;
 
   /**
    * The maximum number of string forms a block can have before we give up.

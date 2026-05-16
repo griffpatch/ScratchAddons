@@ -57,6 +57,12 @@
       "min": 1,
       "max": 100,
       "default": 40
+    },
+    {
+      "name": "Top-level blocks only",
+      "id": "top_level_only",
+      "type": "boolean",
+      "default": false
     }
   ],
   "versionAdded": "1.30.0",

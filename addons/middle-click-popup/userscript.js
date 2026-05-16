@@ -1,7 +1,7 @@
 //@ts-check
 
 import WorkspaceQuerier, { QueryResult } from "./WorkspaceQuerier.js";
-import renderBlock, { BlockComponent, getBlockHeight } from "./BlockRenderer.js";
+import renderBlock, { BlockComponent, getBlockHeight, getBlockCenterOffset, getBlockBgOffset } from "./BlockRenderer.js";
 import { BlockInstance, BlockShape, BlockTypeInfo } from "./BlockTypeInfo.js";
 import { onClearTextWidthCache } from "./module.js";
 
@@ -113,6 +113,7 @@ export default async function ({ addon, msg, console }) {
 
     const workspace = addon.tab.traps.getWorkspace();
     blockTypes = BlockTypeInfo.getBlocks(Blockly, vm, workspace, msg);
+    querier.maxDepth = addon.settings.get("top_level_only") ? 1 : Infinity;
     querier.indexWorkspace([...blockTypes]);
     blockTypes.sort((a, b) => {
       // Block order:
@@ -253,7 +254,7 @@ export default async function ({ addon, msg, console }) {
       );
 
       const height = getBlockHeight(result.block);
-      svgBackground.setAttribute("transform", `translate(0, ${(y + height / 10) * previewScale})`);
+      svgBackground.setAttribute("transform", `translate(0, ${(y + getBlockBgOffset(result.block)) * previewScale})`);
       svgBackground.setAttribute("height", height * previewScale + "px");
       svgBackground.classList.add("sa-mcp-preview-block-bg");
       svgBackground.addEventListener("mousemove", mouseMoveListener);
@@ -364,7 +365,7 @@ export default async function ({ addon, msg, console }) {
       var blockX = 5;
       if (blockX + preview.renderedBlock.width > previewWidth / previewScale)
         blockX += (previewWidth / previewScale - blockX - preview.renderedBlock.width) * previewScale * cursorPosRel;
-      var blockY = (y + 30) * previewScale;
+      var blockY = (y + getBlockCenterOffset(preview.block)) * previewScale;
 
       preview.svgBlock.setAttribute("transform", `translate(${blockX}, ${blockY}) scale(${previewScale})`);
 
