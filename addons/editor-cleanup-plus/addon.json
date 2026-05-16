@@ -23,6 +23,22 @@
       "id": "promptUnused",
       "type": "boolean",
       "default": false
+    },
+    {
+      "name": "Gap between scripts (px)",
+      "description": "Vertical gap between scripts in each column after clean up. Set to 0 to use the workspace grid size.",
+      "id": "stackGap",
+      "type": "integer",
+      "min": 0,
+      "max": 200,
+      "default": 50
+    },
+    {
+      "name": "Live tidy-up",
+      "description": "Automatically push scripts down to keep spacing when blocks are added to a stack above them.",
+      "id": "liveCleanup",
+      "type": "boolean",
+      "default": true
     }
   ],
   "dynamicEnable": true,

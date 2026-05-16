@@ -17,6 +17,122 @@ export default async function ({ addon, console, msg, safeMsg: m }) {
     return enabledAddons.includes("script-snap");
   };
 
+  // Returns the stack's reference corner and opposite edge for column-overlap checks.
+  // LTR: pos = top-left, xMax = right edge. RTL: pos = top-right, xMax = left edge.
+  const getBlockPosAndXMax = (block) => {
+    const { x, y } = block.getRelativeToSurfaceXY();
+    const { width } = block.getHeightWidth();
+    return block.RTL ? { pos: { x: x + width, y }, xMax: x } : { pos: { x, y }, xMax: x + width };
+  };
+
+  // Patch bumpNeighbours so that when live cleanup is enabled, instead of Blockly's
+  // arbitrary-direction bumping we push stacks in the same column downward to restore spacing.
+  let isBumping = false;
+  const bumpMethod = blockly.registry ? "bumpNeighbours" : "bumpNeighbours_";
+  const origBump = blockly.BlockSvg.prototype[bumpMethod];
+  blockly.BlockSvg.prototype[bumpMethod] = function () {
+    if (isBumping) return;
+    if (addon.self.disabled || !addon.settings.get("liveCleanup")) {
+      return origBump.call(this);
+    }
+
+    const root = this.getRootBlock();
+    const wksp = root.workspace;
+    if (!wksp || wksp.isFlyout || wksp.isDragging()) return;
+    // Only push for hat/statement blocks (no output). Reporters and booleans have an
+    // outputConnection and float freely — pushing for them would be too disruptive.
+    if (root.outputConnection) return;
+
+    let { pos: tPos, xMax: tXMax } = getBlockPosAndXMax(root);
+    // Blocks injected programmatically start at (0,0) before being positioned;
+    // skip the bump at that moment to avoid displacing the top-left script.
+    if (tPos.x === 0 && tPos.y === 0) return;
+
+    const isRTL = root.RTL;
+    const gap = addon.settings.get("stackGap");
+
+    isBumping = true;
+    try {
+      // Snap root horizontally to align with the nearest tightly-aligned neighbour.
+      // If a top block's left edge is within 30px left / 50px right of root's left edge,
+      // snap root to it so columns stay crisp.
+      const rootLeft = isRTL ? tXMax : tPos.x;
+      let snapTarget = null;
+      let snapDist = Infinity;
+      for (const b of wksp.getTopBlocks()) {
+        if (b === root) continue;
+        const { pos: bPos, xMax: bXMax } = getBlockPosAndXMax(b);
+        const bLeft = isRTL ? bXMax : bPos.x;
+        const leftOffset = bLeft - rootLeft;
+        if (leftOffset !== 0 && leftOffset >= -30 && leftOffset <= 50) {
+          const yDist = Math.abs(bPos.y - tPos.y);
+          if (yDist < snapDist) {
+            snapDist = yDist;
+            snapTarget = bLeft;
+          }
+        }
+      }
+      if (snapTarget !== null) {
+        root.moveBy(snapTarget - rootLeft, 0);
+        ({ pos: tPos, xMax: tXMax } = getBlockPosAndXMax(root));
+      }
+
+      // Cascade blocks below root downward to restore spacing.
+      const tBottom = tPos.y + root.getHeightWidth().height;
+
+      const columnBlocks = wksp
+        .getTopBlocks()
+        .filter((b) => {
+          if (b === root) return false;
+          const { pos } = getBlockPosAndXMax(b);
+          return pos.y >= tPos.y;
+        })
+        .sort((a, b) => {
+          const { pos: pa } = getBlockPosAndXMax(a);
+          const { pos: pb } = getBlockPosAndXMax(b);
+          return pa.y - pb.y;
+        });
+
+      let floor = tBottom + gap;
+      let lastShift = 0;
+      for (const block of columnBlocks) {
+        const { pos, xMax } = getBlockPosAndXMax(block);
+
+        // Outer guard: if the block's X span doesn't overlap the column at all, skip it —
+        // it's in a different column and we should never touch it.
+        const overlaps = isRTL
+          ? tPos.x >= xMax && pos.x >= tXMax
+          : tPos.x <= xMax && pos.x <= tXMax;
+
+        // Tight column: the block's left edge is closely aligned with root's left edge
+        // (within 30px to the left or 50px to the right). Only these blocks advance the floor.
+        const blockLeft = isRTL ? xMax : pos.x;
+        const leftOffset = blockLeft - (isRTL ? tXMax : tPos.x);
+        const tightColumn = leftOffset >= -30 && leftOffset <= 50;
+
+        if (!tightColumn && !overlaps) continue; // clearly a different column — leave it alone
+
+        if (block.outputConnection || !tightColumn) {
+          // Reporters, booleans, and loosely-aligned stacks: keep in step with the
+          // last tight-column shift so they stay in relative position.
+          if (lastShift > 0) block.moveBy(0, lastShift);
+        } else {
+          // Tightly-aligned hat/statement block: push to floor and advance it.
+          const delta = floor - pos.y;
+          if (delta > 0) {
+            block.moveBy(0, delta);
+            lastShift = delta;
+          } else {
+            lastShift = 0;
+          }
+          floor = Math.max(pos.y, floor) + block.getHeightWidth().height + gap;
+        }
+      }
+    } finally {
+      isBumping = false;
+    }
+  };
+
   const originalMsg = blockly.Msg.CLEAN_UP;
   addon.self.addEventListener("disabled", () => (blockly.Msg.CLEAN_UP = originalMsg));
   addon.self.addEventListener("reenabled", () => (blockly.Msg.CLEAN_UP = m("clean-plus")));
@@ -52,10 +168,7 @@ export default async function ({ addon, console, msg, safeMsg: m }) {
     }
 
     const gridSize = workspace.getGrid().spacing || workspace.getGrid().spacing_; // new blockly || old blockly
-    // Use a fixed pixel gap when script-snap is off; the grid-size gap was too large without snapping.
-    const gap = scriptSnapEnabled ? gridSize : NON_SNAP_GAP;
-    // Horizontal gap between columns: at least 64px regardless of the vertical gap.
-    const hGap = Math.max(gap, 64);
+    const gap = addon.settings.get("stackGap");
 
     // When script-snap is active, coordinates start between workspace dots so snap aligns to them
     const startOffset = scriptSnapEnabled ? gridSize / 2 : 0;
