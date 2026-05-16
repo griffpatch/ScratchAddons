@@ -423,9 +423,6 @@ export default async function ({ addon, msg, console }) {
     } finally {
       Blockly.Events.enable();
     }
-    if (Blockly.Events.isEnabled()) {
-      Blockly.Events.fire(new Blockly.Events.BlockCreate(newBlock));
-    }
 
     let fakeEvent = /** @type {any} */ ({
       clientX: mousePosition.x,
@@ -459,6 +456,11 @@ export default async function ({ addon, msg, console }) {
       gesture.hasExceededDragRadius = true;
       gesture.dragger = gesture.createDragger(newBlock, workspace);
       gesture.dragger.onDragStart(fakeEvent);
+      // Fire BlockCreate inside the drag's event group (set by onDragStart) so it
+      // coalesces with the BlockMove fired on drop into a single undo point.
+      if (Blockly.Events.isEnabled()) {
+        Blockly.Events.fire(new Blockly.Events.BlockCreate(newBlock));
+      }
       if (e instanceof KeyboardEvent) {
         // Blockly gets confused when it receives two pointerdown events (the fake one
         // and a real one) without a pointerup in between. Prevent it from canceling
@@ -469,6 +471,11 @@ export default async function ({ addon, msg, console }) {
     } else {
       if (workspace.getGesture(fakeEvent)) {
         workspace.startDragWithFakeEvent(fakeEvent, newBlock);
+      }
+      // Fire BlockCreate inside the drag's event group so it coalesces with the
+      // BlockMove fired on drop into a single undo point.
+      if (Blockly.Events.isEnabled()) {
+        Blockly.Events.fire(new Blockly.Events.BlockCreate(newBlock));
       }
     }
   }
