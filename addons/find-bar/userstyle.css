@@ -434,3 +434,141 @@ span.sa-find-nav-controls {
   transform: translate(-50%, 4px);
   transition: opacity 0.3s ease, transform 0.3s ease;
 }
+
+/* ── Carousel info panel (click-triggered table) ───────────────────── */
+
+.sa-find-info-panel {
+  position: fixed;
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  outline: 2px solid rgba(196, 204, 217, 0.57);
+  padding: 6px 4px;
+  z-index: 99999;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 0.75rem;
+  user-select: none;
+}
+
+.sa-find-info-table {
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+
+.sa-find-info-table th,
+.sa-find-info-table td {
+  padding: 3px 8px;
+  text-align: center;
+}
+
+.sa-find-info-table td:first-child {
+  text-align: left;
+}
+
+.sa-find-info-col-header {
+  font-weight: 600;
+  color: #575e75;
+  font-size: 0.7rem;
+}
+
+.sa-find-info-col-header label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.sa-find-info-sprite-cell {
+  text-align: left;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sa-find-info-sprite-cell label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  color: #575e75;
+}
+
+.sa-find-info-checkbox {
+  cursor: pointer;
+  accent-color: #4c97ff;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.sa-find-info-count-cell {
+  color: #575e75;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+.sa-find-info-count-zero {
+  opacity: 0.3;
+}
+
+.sa-find-info-table tbody tr:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+/* ── Instances table ─────────────────────────────────────────────── */
+
+.sa-find-info-divider {
+  border: none;
+  border-top: 1px solid #e0e4ec;
+  margin: 5px 4px 3px;
+}
+
+.sa-find-info-instances-wrap {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.sa-find-info-instances-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.sa-find-info-instances-table thead th {
+  position: sticky;
+  top: 0;
+  background: white;
+  font-weight: 600;
+  color: #575e75;
+  font-size: 0.7rem;
+  padding: 2px 8px 4px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.sa-find-info-instance-row {
+  cursor: pointer;
+}
+
+.sa-find-info-instance-row:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+.sa-find-info-inst-sprite,
+.sa-find-info-inst-hat,
+.sa-find-info-inst-block {
+  padding: 3px 8px;
+  color: #575e75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.sa-find-info-inst-sprite {
+  font-weight: 600;
+}

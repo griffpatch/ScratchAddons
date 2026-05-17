@@ -40,5 +40,17 @@
   "find-bar/delete-this-clone": "delete this clone",
   "find-bar/create-clone-of-sprite": "create clone of {sprite}",
   "find-bar/all-sprites-tooltip": "for all sprites",
-  "find-bar/explore-usages": "Explore Usages"
+  "find-bar/explore-usages": "Explore Usages",
+  "find-bar/info-call": "call",
+  "find-bar/info-change": "change",
+  "find-bar/info-definition": "definition",
+  "find-bar/info-modify": "modify",
+  "find-bar/info-read": "read",
+  "find-bar/info-receive": "receive",
+  "find-bar/info-send": "send",
+  "find-bar/info-set": "set",
+  "find-bar/info-use": "use",
+  "find-bar/info-col-block": "Block",
+  "find-bar/info-col-hat": "Hat block",
+  "find-bar/info-col-sprite": "Sprite"
 }

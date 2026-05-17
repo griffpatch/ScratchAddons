@@ -1673,6 +1673,10 @@ export default async function ({ addon, msg, console }) {
       this.highlighter = new BlockHighlighter(findBar.utils.addon);
       this.spriteNotification = null; // Element for showing sprite switch notifications
       this.notificationTimeout = null; // Timeout for hiding notification
+      this.allBlocks = []; // Unfiltered block list
+      this.activeSubTypeFilters = new Set(); // Empty = no filtering; non-empty = only these sub-types
+      this.activeSpriteFilters = new Set(); // Empty = no filtering; non-empty = only these targetIds
+      this.infoPanel = new CarouselInfoPanel(this);
     }
 
     /**
@@ -1709,6 +1713,82 @@ export default async function ({ addon, msg, console }) {
       });
     }
 
+    /** Returns the opcode/type string for any block (Blockly.Block or BlockInstance). */
+    getBlockOpcode(block) {
+      if (block.type) return block.type; // Blockly.Block
+      const runtime = addon.tab.traps.vm.runtime;
+      const target = runtime.targets.find((t) => t.id === block.targetId);
+      return target?.blocks._blocks?.[block.id]?.opcode ?? null;
+    }
+
+    /** Returns the target ID for any block (Blockly.Block or BlockInstance). */
+    getBlockTargetId(block) {
+      return block.targetId ?? this.utils.getEditingTarget().id;
+    }
+
+    /**
+     * Returns the sub-type key for a block within a given carousel item cls,
+     * used for filter chip grouping. Returns null for cls values with no sub-types.
+     */
+    getSubTypeKey(block, cls) {
+      if (cls !== "var" && cls !== "VAR" && cls !== "list" && cls !== "LIST" && cls !== "broadcast" && cls !== "define") {
+        return null;
+      }
+      const opcode = this.getBlockOpcode(block);
+      if (!opcode) return null;
+      if (cls === "var" || cls === "VAR") {
+        if (opcode === "data_setvariableto") return "set";
+        if (opcode === "data_changevariableby") return "change";
+        return "use";
+      }
+      if (cls === "list" || cls === "LIST") {
+        const modifyOpcodes = [
+          "data_addtolist",
+          "data_deleteoflist",
+          "data_deletealloflist",
+          "data_insertatlist",
+          "data_replaceitemoflist",
+        ];
+        return modifyOpcodes.includes(opcode) ? "modify" : "read";
+      }
+      if (cls === "broadcast") {
+        return opcode === "event_whenbroadcastreceived" ? "receive" : "send";
+      }
+      if (cls === "define") {
+        return opcode === "procedures_definition" ? "definition" : "call";
+      }
+      return null;
+    }
+
+    /**
+     * Recomputes this.blocks from this.allBlocks applying active sub-type and sprite filters.
+     * Empty filter sets mean "no restriction" — both must be non-empty to restrict.
+     * Clamps this.idx and updates the count display.
+     */
+    applyFilters() {
+      const cls = this.selectedItem?.data?.cls;
+      const hasSubTypeFilter = this.activeSubTypeFilters.size > 0;
+      const hasSpriteFilter = this.activeSpriteFilters.size > 0;
+      if (!hasSubTypeFilter && !hasSpriteFilter) {
+        this.blocks = [...this.allBlocks];
+      } else {
+        this.blocks = this.allBlocks.filter((block) => {
+          if (hasSpriteFilter && !this.activeSpriteFilters.has(this.getBlockTargetId(block))) return false;
+          if (hasSubTypeFilter) {
+            const subType = this.getSubTypeKey(block, cls);
+            if (subType !== null && !this.activeSubTypeFilters.has(subType)) return false;
+          }
+          return true;
+        });
+      }
+      if (this.idx >= this.blocks.length) {
+        this.idx = Math.max(0, this.blocks.length - 1);
+      }
+      if (this.count) {
+        this.count.innerHTML = this.blocks.length > 0 ? this.idx + 1 + " / " + this.blocks.length : "0";
+      }
+    }
+
     build(item, blocks, instanceBlock, forceAllSprites = false, cloneFilterContext = null) {
       // Clear previous highlights
       this.highlighter.clearAll();
@@ -1718,6 +1798,9 @@ export default async function ({ addon, msg, console }) {
         this.navRight();
       } else {
         this.remove();
+        this.allBlocks = blocks;
+        this.activeSubTypeFilters = new Set();
+        this.activeSpriteFilters = new Set();
         this.blocks = blocks;
         this.selectedItem = item;
         this.isDirty = false;
@@ -1746,6 +1829,11 @@ export default async function ({ addon, msg, console }) {
         // Immediately show in navigation area (even if 0 items)
         if (this.findBar) {
           this.findBar.showNavigation(item, this);
+        }
+
+        // Build info panel (only if there are blocks to show)
+        if (this.allBlocks.length > 0) {
+          this.infoPanel.build(this.allBlocks, item);
         }
 
         // Listen for workspace changes to mark carousel as dirty
@@ -1891,9 +1979,10 @@ export default async function ({ addon, msg, console }) {
 
       // Try to maintain position on the same block ID if it still exists
       const currentBlockId = this.blocks[this.idx]?.id;
-      this.blocks = blocks;
+      this.allBlocks = blocks;
+      this.applyFilters(); // rebuilds this.blocks from allBlocks with current filters
 
-      // Find the index of the current block in the new list
+      // Find the index of the current block in the new filtered list
       if (currentBlockId) {
         const newIdx = this.blocks.findIndex((b) => b.id === currentBlockId);
         if (newIdx !== -1) {
@@ -1906,7 +1995,7 @@ export default async function ({ addon, msg, console }) {
         this.idx = 0;
       }
 
-      // Update the count display
+      // Update the count display with the restored idx
       if (this.count) {
         this.count.innerHTML = this.blocks.length > 0 ? this.idx + 1 + " / " + this.blocks.length : "0";
       }
@@ -1919,6 +2008,11 @@ export default async function ({ addon, msg, console }) {
         if (block) {
           this.highlighter.highlight(block);
         }
+      }
+
+      // Refresh the info panel with updated block data
+      if (this.allBlocks.length > 0) {
+        this.infoPanel.build(this.allBlocks, this.selectedItem);
       }
 
       this.isDirty = false;
@@ -1949,12 +2043,8 @@ export default async function ({ addon, msg, console }) {
       this.count.className = "sa-find-carousel-count";
       this.count.innerHTML = this.blocks.length > 0 ? this.idx + 1 + " / " + this.blocks.length : "0";
       this.count.addEventListener("mousedown", (e) => {
-        // Ensure list is up-to-date before acting
         this.refreshIfDirty();
-        // Re-flash the current block
-        if (this.idx < this.blocks.length) {
-          this.utils.scrollBlockIntoView(this.blocks[this.idx]);
-        }
+        this.infoPanel.toggle(this.count);
         e.preventDefault();
         e.stopPropagation();
       });
@@ -2064,6 +2154,7 @@ export default async function ({ addon, msg, console }) {
     remove() {
       this.stopListeningForChanges();
       this.highlighter.clearAll();
+      this.infoPanel.remove();
 
       // Clean up notification
       if (this.notificationTimeout) {
@@ -2081,6 +2172,475 @@ export default async function ({ addon, msg, console }) {
         this.idx = 0;
         this.selectedItem = null;
         this.isDirty = false;
+      }
+    }
+  }
+
+  class CarouselInfoPanel {
+    constructor(carousel) {
+      this.carousel = carousel;
+      this.el = null;
+      this._outsideClickHandler = null;
+      this._escKeyHandler = null;
+    }
+
+    /**
+     * Returns an ordered array of sub-type definitions [{key, label}] for the given cls,
+     * or null if the cls has no meaningful sub-type breakdown.
+     */
+    getSubTypes(cls) {
+      if (cls === "var" || cls === "VAR") {
+        return [
+          { key: "set", label: msg("info-set") },
+          { key: "change", label: msg("info-change") },
+          { key: "use", label: msg("info-use") },
+        ];
+      }
+      if (cls === "list" || cls === "LIST") {
+        return [
+          { key: "modify", label: msg("info-modify") },
+          { key: "read", label: msg("info-read") },
+        ];
+      }
+      if (cls === "broadcast") {
+        return [
+          { key: "send", label: msg("info-send") },
+          { key: "receive", label: msg("info-receive") },
+        ];
+      }
+      if (cls === "define") {
+        return [
+          { key: "definition", label: msg("info-definition") },
+          { key: "call", label: msg("info-call") },
+        ];
+      }
+      return null;
+    }
+
+    /**
+     * Builds the panel DOM from the full (unfiltered) block list and appends it to
+     * document.body (hidden). Call toggle() to show it.
+     */
+    build(allBlocks, item) {
+      const runtime = addon.tab.traps.vm.runtime;
+      const cls = item?.data?.cls;
+      const allSubTypes = this.getSubTypes(cls);
+
+      if (this.el) this.el.remove();
+      this.el = document.createElement("div");
+      this.el.className = "sa-find-info-panel";
+      this.el.style.display = "none";
+
+      // Gather per-sprite, per-subtype counts from allBlocks
+      const spriteOrder = []; // Ordered list of targetIds (insertion order)
+      const spriteNames = new Map(); // targetId → display name
+      const counts = new Map(); // targetId → { [subType]: number, total: number }
+
+      for (const block of allBlocks) {
+        const targetId = this.carousel.getBlockTargetId(block);
+        if (!spriteOrder.includes(targetId)) {
+          spriteOrder.push(targetId);
+          const target = runtime.targets.find((t) => t.id === targetId);
+          spriteNames.set(targetId, target?.getName() ?? "?");
+          counts.set(targetId, { total: 0 });
+        }
+        const row = counts.get(targetId);
+        row.total++;
+        if (allSubTypes) {
+          const subType = this.carousel.getSubTypeKey(block, cls);
+          if (subType) row[subType] = (row[subType] ?? 0) + 1;
+        }
+      }
+
+      const table = this.el.appendChild(document.createElement("table"));
+      table.className = "sa-find-info-table";
+
+      if (allSubTypes) {
+        // Only show sub-type columns that actually have blocks
+        const usedSubTypes = allSubTypes.filter(({ key }) =>
+          spriteOrder.some((id) => (counts.get(id)?.[key] ?? 0) > 0)
+        );
+
+        if (usedSubTypes.length > 1) {
+          // Header row with column checkboxes
+          const thead = table.appendChild(document.createElement("thead"));
+          const headerRow = thead.appendChild(document.createElement("tr"));
+          headerRow.appendChild(document.createElement("th")); // empty corner
+
+          for (const { key, label } of usedSubTypes) {
+            const th = headerRow.appendChild(document.createElement("th"));
+            th.className = "sa-find-info-col-header";
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.className = "sa-find-info-checkbox";
+            cb.checked = this.carousel.activeSubTypeFilters.has(key);
+            cb.addEventListener("change", () => this._onFilterChange());
+            cb.dataset.subTypeKey = key;
+            const lbl = document.createElement("label");
+            lbl.appendChild(cb);
+            lbl.appendChild(document.createTextNode(" " + label));
+            th.appendChild(lbl);
+          }
+        }
+
+        // Data rows — one per sprite
+        const tbody = table.appendChild(document.createElement("tbody"));
+        for (const targetId of spriteOrder) {
+          const tr = tbody.appendChild(document.createElement("tr"));
+
+          const spriteCell = tr.appendChild(document.createElement("td"));
+          spriteCell.className = "sa-find-info-sprite-cell";
+          const rowCb = document.createElement("input");
+          rowCb.type = "checkbox";
+          rowCb.className = "sa-find-info-checkbox";
+          rowCb.checked = this.carousel.activeSpriteFilters.has(targetId);
+          rowCb.dataset.spriteTargetId = targetId;
+          rowCb.addEventListener("change", () => this._onFilterChange());
+          const rowLbl = document.createElement("label");
+          rowLbl.appendChild(rowCb);
+          rowLbl.appendChild(document.createTextNode(" " + spriteNames.get(targetId)));
+          spriteCell.appendChild(rowLbl);
+
+          for (const { key } of usedSubTypes.length > 1 ? usedSubTypes : []) {
+            const td = tr.appendChild(document.createElement("td"));
+            td.className = "sa-find-info-count-cell";
+            const n = counts.get(targetId)?.[key] ?? 0;
+            td.textContent = n > 0 ? String(n) : "–";
+            if (n === 0) td.classList.add("sa-find-info-count-zero");
+          }
+
+          // When only one sub-type column exists, show the total count instead
+          if (usedSubTypes.length === 1) {
+            const td = tr.appendChild(document.createElement("td"));
+            td.className = "sa-find-info-count-cell";
+            td.textContent = String(counts.get(targetId)?.total ?? 0);
+          }
+        }
+      } else {
+        // No sub-types — sprite rows with checkbox and total count
+        const tbody = table.appendChild(document.createElement("tbody"));
+        for (const targetId of spriteOrder) {
+          const tr = tbody.appendChild(document.createElement("tr"));
+
+          const spriteCell = tr.appendChild(document.createElement("td"));
+          spriteCell.className = "sa-find-info-sprite-cell";
+          const rowCb = document.createElement("input");
+          rowCb.type = "checkbox";
+          rowCb.className = "sa-find-info-checkbox";
+          rowCb.checked = this.carousel.activeSpriteFilters.has(targetId);
+          rowCb.dataset.spriteTargetId = targetId;
+          rowCb.addEventListener("change", () => this._onFilterChange());
+          const rowLbl = document.createElement("label");
+          rowLbl.appendChild(rowCb);
+          rowLbl.appendChild(document.createTextNode(" " + spriteNames.get(targetId)));
+          spriteCell.appendChild(rowLbl);
+
+          const td = tr.appendChild(document.createElement("td"));
+          td.className = "sa-find-info-count-cell";
+          td.textContent = String(counts.get(targetId)?.total ?? 0);
+        }
+      }
+
+      // ── Instances table ─────────────────────────────────────────────
+      const hr = this.el.appendChild(document.createElement("hr"));
+      hr.className = "sa-find-info-divider";
+
+      const instancesWrap = this.el.appendChild(document.createElement("div"));
+      instancesWrap.className = "sa-find-info-instances-wrap";
+
+      const instTable = instancesWrap.appendChild(document.createElement("table"));
+      instTable.className = "sa-find-info-instances-table";
+
+      const instHead = instTable.appendChild(document.createElement("thead"));
+      const instHeadRow = instHead.appendChild(document.createElement("tr"));
+      for (const label of [msg("info-col-sprite"), msg("info-col-hat"), msg("info-col-block")]) {
+        const th = instHeadRow.appendChild(document.createElement("th"));
+        th.textContent = label;
+      }
+
+      const instBody = instTable.appendChild(document.createElement("tbody"));
+      for (const block of allBlocks) {
+        const targetId = this.carousel.getBlockTargetId(block);
+        const target = runtime.targets.find((t) => t.id === targetId);
+        const rawBlocks = target?.blocks._blocks ?? {};
+        const rawBlock = rawBlocks[block.id];
+        const rootBlock = rawBlock ? this._getRootBlockData(block.id, rawBlocks) : null;
+
+        const tr = instBody.appendChild(document.createElement("tr"));
+        tr.className = "sa-find-info-instance-row";
+        tr.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        tr.addEventListener("click", () => {
+          const idxInFiltered = this.carousel.blocks.indexOf(block);
+          if (idxInFiltered !== -1) {
+            this.carousel.idx = idxInFiltered;
+            if (this.carousel.count) {
+              this.carousel.count.innerHTML =
+                this.carousel.idx + 1 + " / " + this.carousel.blocks.length;
+            }
+          }
+          this.carousel.utils.scrollBlockIntoView(block);
+          this.hide();
+        });
+
+        const spriteText = spriteNames.get(targetId) ?? "?";
+        const hatText = rootBlock ? this._hatText(rootBlock, rawBlocks) : "–";
+        const blockText = rawBlock ? this._blockText(rawBlock, rawBlocks) : "–";
+
+        for (const [text, cls] of [
+          [spriteText, "sa-find-info-inst-sprite"],
+          [hatText, "sa-find-info-inst-hat"],
+          [blockText, "sa-find-info-inst-block"],
+        ]) {
+          const td = tr.appendChild(document.createElement("td"));
+          td.className = cls;
+          td.textContent = text;
+          td.title = text;
+        }
+      }
+
+      document.body.appendChild(this.el);
+    }
+
+    /** Walks up the parent chain and returns the root block data object. */
+    _getRootBlockData(blockId, rawBlocks) {
+      let id = blockId;
+      while (rawBlocks[id]?.parent) {
+        id = rawBlocks[id].parent;
+      }
+      return rawBlocks[id] ?? null;
+    }
+
+    /**
+     * Resolves a block input slot to a short display string.
+     * scratch-vm stores inputs as objects: {block: primaryId, shadow: shadowId}.
+     * If block === shadow the slot holds a literal shadow value; otherwise a reporter is plugged in.
+     */
+    _resolveInput(inputs, key, rawBlocks, depth = 0) {
+      const input = inputs?.[key];
+      if (!input) return "?";
+      const primaryId = input.block;
+      if (!primaryId) return "?";
+      const primaryBlock = rawBlocks[primaryId];
+      if (!primaryBlock) return "?";
+      // Shadow (literal) — read the field value directly
+      if (primaryId === input.shadow) {
+        const firstField = Object.values(primaryBlock.fields ?? {})[0];
+        return firstField ? String(firstField.value) : "";
+      }
+      // Reporter plugged in — describe it
+      if (depth >= 3) return "(\u2026)";
+      return this._describeReporter(primaryBlock, rawBlocks, depth + 1);
+    }
+
+    /** Recursively describes a reporter block as a plain-text string. */
+    _describeReporter(blockData, rawBlocks, depth = 0) {
+      if (!blockData) return "?";
+      const { opcode, fields, inputs } = blockData;
+      const f = (name) => fields?.[name]?.value ?? "?";
+      const i = (name) => this._resolveInput(inputs, name, rawBlocks, depth);
+
+      switch (opcode) {
+        case "data_variable": return f("VARIABLE");
+        case "data_list": return f("LIST");
+        case "data_itemoflist": return `item ${i("INDEX")} of ${f("LIST")}`;
+        case "data_lengthoflist": return `length of ${f("LIST")}`;
+        case "data_itemnumoflist": return `item # of ${i("ITEM")} in ${f("LIST")}`;
+        case "data_listcontainsitem": return `${f("LIST")} contains ${i("ITEM")}`;
+        case "operator_add": return `(${i("NUM1")} + ${i("NUM2")})`;
+        case "operator_subtract": return `(${i("NUM1")} \u2212 ${i("NUM2")})`;
+        case "operator_multiply": return `(${i("NUM1")} \u00D7 ${i("NUM2")})`;
+        case "operator_divide": return `(${i("NUM1")} / ${i("NUM2")})`;
+        case "operator_mod": return `(${i("NUM1")} mod ${i("NUM2")})`;
+        case "operator_round": return `round ${i("NUM")}`;
+        case "operator_join": return `join ${i("STRING1")} ${i("STRING2")}`;
+        case "operator_letter_of": return `letter ${i("LETTER")} of ${i("STRING")}`;
+        case "operator_length": return `length of ${i("STRING")}`;
+        case "operator_contains": return `${i("STRING1")} contains ${i("STRING2")}`;
+        case "operator_mathop": return `${f("OPERATOR")} of ${i("NUM")}`;
+        case "motion_xposition": return "x";
+        case "motion_yposition": return "y";
+        case "motion_direction": return "direction";
+        case "looks_size": return "size";
+        case "looks_costumenumbername": return f("NUMBER_NAME") === "name" ? "costume name" : "costume #";
+        case "looks_backdropnumbername": return f("NUMBER_NAME") === "name" ? "backdrop name" : "backdrop #";
+        case "sound_volume": return "volume";
+        case "sensing_timer": return "timer";
+        case "sensing_answer": return "answer";
+        case "sensing_loudness": return "loudness";
+        case "sensing_dayssince2000": return "days since 2000";
+        case "sensing_current": return `current ${f("CURRENTMENU").toLowerCase()}`;
+        case "sensing_username": return "username";
+        case "sensing_mousex": return "mouse x";
+        case "sensing_mousey": return "mouse y";
+        case "sensing_distanceto": return `distance to ${i("DISTANCETOMENU")}`;
+        default:
+          return opcode.replace(/^[a-zA-Z]+_/, "");
+      }
+    }
+
+    /** Returns a human-readable text for a block, used in the instances table. */
+    _blockText(blockData, rawBlocks) {
+      if (!blockData) return "?";
+      const { opcode, fields, inputs, mutation } = blockData;
+      const f = (name) => fields?.[name]?.value ?? "?";
+      const i = (name) => this._resolveInput(inputs, name, rawBlocks);
+
+      switch (opcode) {
+        case "data_setvariableto": return `set ${f("VARIABLE")} to ${i("VALUE")}`;
+        case "data_changevariableby": return `change ${f("VARIABLE")} by ${i("VALUE")}`;
+        case "data_variable": return f("VARIABLE");
+        case "data_showvariable": return `show variable ${f("VARIABLE")}`;
+        case "data_hidevariable": return `hide variable ${f("VARIABLE")}`;
+        case "data_addtolist": return `add ${i("ITEM")} to ${f("LIST")}`;
+        case "data_deleteoflist": return `delete ${i("INDEX")} of ${f("LIST")}`;
+        case "data_deletealloflist": return `delete all of ${f("LIST")}`;
+        case "data_insertatlist": return `insert ${i("ITEM")} at ${i("INDEX")} of ${f("LIST")}`;
+        case "data_replaceitemoflist": return `replace item ${i("INDEX")} of ${f("LIST")} with ${i("ITEM")}`;
+        case "data_itemoflist": return `item ${i("INDEX")} of ${f("LIST")}`;
+        case "data_itemnumoflist": return `item # of ${i("ITEM")} in ${f("LIST")}`;
+        case "data_lengthoflist": return `length of ${f("LIST")}`;
+        case "data_listcontainsitem": return `${f("LIST")} contains ${i("ITEM")}`;
+        case "data_showlist": return `show list ${f("LIST")}`;
+        case "data_hidelist": return `hide list ${f("LIST")}`;
+        case "data_list": return f("LIST");
+        case "event_broadcast": return `broadcast ${i("BROADCAST_INPUT")}`;
+        case "event_broadcastandwait": return `broadcast ${i("BROADCAST_INPUT")} and wait`;
+        case "event_whenbroadcastreceived": return `when I receive ${f("BROADCAST_OPTION")}`;
+        case "procedures_call": {
+          const proccode = mutation?.proccode ?? "?";
+          const argIds = JSON.parse(mutation?.argumentids ?? "[]");
+          let text = proccode;
+          for (const argId of argIds) {
+            text = text.replace(/%(s|b)/, i(argId));
+          }
+          return text;
+        }
+        case "procedures_definition": {
+          const protoId = inputs?.custom_block?.block;
+          const proto = protoId ? rawBlocks[protoId] : null;
+          return `define ${proto?.mutation?.proccode ?? "?"}`;
+        }
+        default:
+          return this._describeReporter(blockData, rawBlocks);
+      }
+    }
+
+    /** Returns a human-readable text for a hat (root) block. */
+    _hatText(blockData, rawBlocks) {
+      if (!blockData) return "–";
+      const { opcode, fields, inputs } = blockData;
+      const f = (name) => fields?.[name]?.value ?? "?";
+
+      switch (opcode) {
+        case "event_whenflagclicked": return "when \uD83C\uDFC1 clicked";
+        case "event_whenkeypressed": return `when ${f("KEY_OPTION")} key pressed`;
+        case "event_whenthisspriteclicked": return "when this sprite clicked";
+        case "event_whenstageclicked": return "when stage clicked";
+        case "event_whenbroadcastreceived": return `when I receive ${f("BROADCAST_OPTION")}`;
+        case "event_whenbackdropswitchesto": return `when backdrop switches to ${f("BACKDROP")}`;
+        case "event_whengreaterthan":
+          return `when ${f("WHENGREATERTHANMENU")} > ${this._resolveInput(inputs, "VALUE", rawBlocks)}`;
+        case "control_start_as_clone": return "when I start as a clone";
+        case "procedures_definition": {
+          const protoId = inputs?.custom_block?.block;
+          const proto = protoId ? rawBlocks[protoId] : null;
+          return `define ${proto?.mutation?.proccode ?? "?"}`;
+        }
+        default:
+          return this._blockText(blockData, rawBlocks);
+      }
+    }
+
+    /**
+     * Reads all checkboxes and updates both filter sets on the carousel,
+     * then applies filters and scrolls to the current block.
+     */
+    _onFilterChange() {
+      if (!this.el) return;
+      const carousel = this.carousel;
+
+      carousel.activeSubTypeFilters = new Set(
+        [...this.el.querySelectorAll("input[data-sub-type-key]:checked")].map((cb) => cb.dataset.subTypeKey)
+      );
+      carousel.activeSpriteFilters = new Set(
+        [...this.el.querySelectorAll("input[data-sprite-target-id]:checked")].map(
+          (cb) => cb.dataset.spriteTargetId
+        )
+      );
+
+      carousel.applyFilters();
+      if (carousel.idx < carousel.blocks.length) {
+        carousel.utils.scrollBlockIntoView(carousel.blocks[carousel.idx]);
+      }
+    }
+
+    isVisible() {
+      return this.el ? this.el.style.display !== "none" : false;
+    }
+
+    toggle(anchorEl) {
+      if (this.isVisible()) {
+        this.hide();
+      } else {
+        this.show(anchorEl);
+      }
+    }
+
+    show(anchorEl) {
+      if (!this.el) return;
+      const rect = anchorEl.getBoundingClientRect();
+      this.el.style.left = rect.left + "px";
+      this.el.style.top = rect.bottom + 4 + "px";
+      this.el.style.display = "block";
+
+      // Close when clicking outside or pressing Escape
+      if (!this._outsideClickHandler) {
+        this._outsideClickHandler = (e) => {
+          if (this.el && this.el.style.display !== "none") {
+            if (!this.el.contains(e.target) && e.target !== anchorEl) {
+              this.hide();
+            }
+          }
+        };
+        this._escKeyHandler = (e) => {
+          if (e.key === "Escape" && this.isVisible()) {
+            this.hide();
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        };
+        // Defer so the current click doesn't immediately close it
+        setTimeout(() => {
+          window.addEventListener("mousedown", this._outsideClickHandler, true);
+          document.addEventListener("keydown", this._escKeyHandler, true);
+        }, 0);
+      }
+    }
+
+    hide() {
+      if (this.el) this.el.style.display = "none";
+      this._removeOutsideClickHandler();
+    }
+
+    _removeOutsideClickHandler() {
+      if (this._outsideClickHandler) {
+        window.removeEventListener("mousedown", this._outsideClickHandler, true);
+        this._outsideClickHandler = null;
+      }
+      if (this._escKeyHandler) {
+        document.removeEventListener("keydown", this._escKeyHandler, true);
+        this._escKeyHandler = null;
+      }
+    }
+
+    remove() {
+      this._removeOutsideClickHandler();
+      if (this.el) {
+        this.el.remove();
+        this.el = null;
       }
     }
   }
