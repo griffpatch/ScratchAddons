@@ -149,9 +149,7 @@ export default async function ({ addon, console, msg, safeMsg: m }) {
 
         // Outer guard: if the block's X span doesn't overlap the column at all, skip it —
         // it's in a different column and we should never touch it.
-        const overlaps = isRTL
-          ? tPos.x >= xMax && pos.x >= tXMax
-          : tPos.x <= xMax && pos.x <= tXMax;
+        const overlaps = isRTL ? tPos.x >= xMax && pos.x >= tXMax : tPos.x <= xMax && pos.x <= tXMax;
 
         // Tight column: the block's left edge is closely aligned with root's left edge
         // (within 30px to the left or 50px to the right). Only these blocks advance the floor.
@@ -218,6 +216,8 @@ export default async function ({ addon, console, msg, safeMsg: m }) {
 
     const gridSize = workspace.getGrid().spacing || workspace.getGrid().spacing_; // new blockly || old blockly
     const gap = addon.settings.get("stackGap");
+    // Horizontal gap between columns: at least 64px regardless of the stackGap setting.
+    const hGap = Math.max(gap, 64);
 
     // Leave a margin from the workspace origin so blocks don't sit flush against the edge.
     // When script-snap is active, snap the margin up to the nearest grid-aligned position
