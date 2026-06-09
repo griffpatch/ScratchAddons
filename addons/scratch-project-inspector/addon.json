@@ -1,0 +1,27 @@
+{
+  "name": "Scratch project inspector",
+  "description": "Converts the current Scratch project into clean pseudocode for review, sharing, or AI analysis.",
+  "credits": [
+    {
+      "name": "griffpatch"
+    }
+  ],
+  "dynamicEnable": true,
+  "dynamicDisable": true,
+  "permissions": ["https://api.scratch.mit.edu/*", "https://projects.scratch.mit.edu/*"],
+  "userscripts": [
+    {
+      "url": "userscript.js",
+      "matches": ["projects"]
+    }
+  ],
+  "userstyles": [
+    {
+      "url": "userstyle.css",
+      "matches": ["projects"]
+    }
+  ],
+  "versionAdded": "1.42.0",
+  "tags": ["editor", "codeEditor"],
+  "enabledByDefault": false
+}

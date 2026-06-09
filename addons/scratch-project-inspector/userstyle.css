@@ -1,0 +1,82 @@
+.sa-inspector-btn {
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 0 0.75rem;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+.sa-inspector-btn:hover {
+  opacity: 1;
+}
+
+.sa-inspector-panel {
+  position: fixed;
+  top: 3rem;
+  right: 1rem;
+  width: 640px;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 5rem);
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  z-index: 9999;
+  font-family: monospace;
+  resize: both;
+  overflow: hidden;
+}
+
+.sa-inspector-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: #313244;
+  border-bottom: 1px solid #45475a;
+  border-radius: 8px 8px 0 0;
+  flex-shrink: 0;
+}
+
+.sa-inspector-title {
+  flex: 1;
+  color: #cdd6f4;
+  font-size: 0.8rem;
+  font-weight: bold;
+  font-family: sans-serif;
+}
+
+.sa-inspector-copy-btn,
+.sa-inspector-close-btn {
+  background: #45475a;
+  border: none;
+  color: #cdd6f4;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  font-family: sans-serif;
+}
+
+.sa-inspector-copy-btn:hover,
+.sa-inspector-close-btn:hover {
+  background: #585b70;
+}
+
+.sa-inspector-content {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  color: #cdd6f4;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre;
+  background: #1e1e2e;
+}
