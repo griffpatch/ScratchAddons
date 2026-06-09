@@ -1,0 +1,9 @@
+{
+  "scratch-project-inspector/inspect-button": "🔍 Inspect",
+  "scratch-project-inspector/panel-title": "Project pseudocode",
+  "scratch-project-inspector/copy-button": "Copy",
+  "scratch-project-inspector/copied": "Copied!",
+  "scratch-project-inspector/loading": "Loading…",
+  "scratch-project-inspector/no-project-id": "No project ID found in the URL. Open a project first.",
+  "scratch-project-inspector/fetch-error": "Could not load project: {error}"
+}
