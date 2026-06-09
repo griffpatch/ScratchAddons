@@ -1,9 +1,12 @@
 {
-  "scratch-project-inspector/inspect-button": "🔍 Inspect",
-  "scratch-project-inspector/panel-title": "Project pseudocode",
+  "scratch-project-inspector/inspect-button": "Inspect project",
+  "scratch-project-inspector/tab-current": "Current",
+  "scratch-project-inspector/load-button": "Load .sb3 file",
+  "scratch-project-inspector/fetch-button": "Fetch project by ID",
+  "scratch-project-inspector/fetch-prompt": "Enter project ID or URL to fetch:",
+  "scratch-project-inspector/compare-button": "Copy comparison prompt",
   "scratch-project-inspector/copy-button": "Copy",
   "scratch-project-inspector/copied": "Copied!",
   "scratch-project-inspector/loading": "Loading…",
-  "scratch-project-inspector/no-project-id": "No project ID found in the URL. Open a project first.",
   "scratch-project-inspector/fetch-error": "Could not load project: {error}"
 }

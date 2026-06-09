@@ -1,12 +1,12 @@
+/* ── Toolbar button (icon only) ───────────────────────────────────────────── */
 .sa-inspector-btn {
   background: none;
   border: none;
   color: white;
   cursor: pointer;
-  font-size: 0.75rem;
-  font-weight: bold;
-  padding: 0 0.75rem;
-  white-space: nowrap;
+  padding: 0 0.5rem;
+  display: flex;
+  align-items: center;
   opacity: 0.85;
 }
 
@@ -14,11 +14,12 @@
   opacity: 1;
 }
 
+/* ── Panel ─────────────────────────────────────────────────────────────────── */
 .sa-inspector-panel {
   position: fixed;
   top: 3rem;
   right: 1rem;
-  width: 640px;
+  width: 680px;
   max-width: calc(100vw - 2rem);
   max-height: calc(100vh - 5rem);
   background: #1e1e2e;
@@ -28,45 +29,100 @@
   display: flex;
   flex-direction: column;
   z-index: 9999;
-  font-family: monospace;
   resize: both;
   overflow: hidden;
 }
 
-.sa-inspector-header {
+/* ── Toolbar (tab strip + action buttons) ─────────────────────────────────── */
+.sa-inspector-toolbar {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
+  align-items: stretch;
   background: #313244;
   border-bottom: 1px solid #45475a;
   border-radius: 8px 8px 0 0;
   flex-shrink: 0;
+  min-height: 32px;
 }
 
-.sa-inspector-title {
+.sa-inspector-tabs {
+  display: flex;
+  align-items: stretch;
   flex: 1;
-  color: #cdd6f4;
-  font-size: 0.8rem;
-  font-weight: bold;
-  font-family: sans-serif;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.sa-inspector-copy-btn,
+.sa-inspector-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.sa-inspector-tab {
+  background: transparent;
+  border: none;
+  border-right: 1px solid #45475a;
+  color: #6c7086;
+  cursor: pointer;
+  font-family: sans-serif;
+  font-size: 0.72rem;
+  padding: 0 0.75rem;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.sa-inspector-tab:hover {
+  background: #3d3f53;
+  color: #cdd6f4;
+}
+
+.sa-inspector-tab-active {
+  background: #1e1e2e;
+  color: #cdd6f4;
+}
+
+.sa-inspector-tab-close {
+  opacity: 0.45;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.sa-inspector-tab-close:hover {
+  opacity: 1;
+}
+
+.sa-inspector-toolbar-actions {
+  display: flex;
+  align-items: center;
+  padding: 0 0.3rem;
+  gap: 0.1rem;
+  flex-shrink: 0;
+  border-left: 1px solid #45475a;
+}
+
+.sa-inspector-action-btn,
 .sa-inspector-close-btn {
-  background: #45475a;
+  background: none;
   border: none;
   color: #cdd6f4;
   cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.35rem;
   border-radius: 4px;
-  padding: 0.2rem 0.5rem;
-  font-size: 0.75rem;
-  font-family: sans-serif;
+  line-height: 1;
 }
 
-.sa-inspector-copy-btn:hover,
+.sa-inspector-action-btn:hover,
 .sa-inspector-close-btn:hover {
-  background: #585b70;
+  background: #45475a;
+}
+
+/* ── Body ──────────────────────────────────────────────────────────────────── */
+.sa-inspector-body {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
 }
 
 .sa-inspector-content {
@@ -76,7 +132,32 @@
   padding: 0.75rem 1rem;
   color: #cdd6f4;
   font-size: 0.75rem;
+  font-family: monospace;
   line-height: 1.5;
   white-space: pre;
   background: #1e1e2e;
+}
+
+/* ── Overlay copy button (bottom-right of code area) ──────────────────────── */
+.sa-inspector-overlay-copy {
+  position: absolute;
+  bottom: 0.6rem;
+  right: 0.6rem;
+  background: rgba(49, 50, 68, 0.85);
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.45rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sa-inspector-body:hover .sa-inspector-overlay-copy {
+  opacity: 1;
+}
+
+.sa-inspector-overlay-copy:hover {
+  background: #45475a;
 }
