@@ -1,96 +1,327 @@
 export default async function ({ addon, msg, console }) {
-  // ─── UI injection ──────────────────────────────────────────────────────────
+  // ─── Toolbar button (single icon) ─────────────────────────────────────────
 
   const nav = await addon.tab.waitForElement("[class*='menu-bar_account-info-group_'] > [href^='/mystuff']", {
     markAsSeen: true,
   });
 
-  const btn = Object.assign(document.createElement("button"), {
+  const toolbarBtn = Object.assign(document.createElement("button"), {
     className: addon.tab.scratchClass("menu-bar_menu-bar-item", "menu-bar_hoverable") + " sa-inspector-btn",
-    textContent: msg("inspect-button"),
+    title: msg("inspect-button"),
+    innerHTML: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <circle cx="6.5" cy="6.5" r="4.5"/>
+      <line x1="10" y1="10" x2="14" y2="14"/>
+    </svg>`,
   });
-  addon.tab.displayNoneWhileDisabled(btn);
-  nav.parentElement.insertBefore(btn, nav);
+  addon.tab.displayNoneWhileDisabled(toolbarBtn);
+  nav.parentElement.insertBefore(toolbarBtn, nav);
+  toolbarBtn.addEventListener("click", handleToolbarClick);
 
-  btn.addEventListener("click", handleInspect);
+  // ─── Panel state ───────────────────────────────────────────────────────────
 
-  // ─── Panel ─────────────────────────────────────────────────────────────────
+  // tabs[0] is always the Current project; subsequent tabs are loaded references.
+  const tabs = []; // [{ label: string, content: string }]
+  let activeTabIndex = 0;
+  let panel = null;
+  let tabBar = null;
+  let contentEl = null;
+  let compareBtn = null;
+  let overlayCopyBtn = null;
 
-  function showPanel(content) {
-    document.querySelector(".sa-inspector-panel")?.remove();
+  // ─── Panel builder ─────────────────────────────────────────────────────────
 
-    const panel = Object.assign(document.createElement("div"), { className: "sa-inspector-panel" });
+  function createPanel() {
+    panel = Object.assign(document.createElement("div"), { className: "sa-inspector-panel" });
 
-    const header = Object.assign(document.createElement("div"), { className: "sa-inspector-header" });
+    // Toolbar: tab strip + action buttons
+    const toolbar = Object.assign(document.createElement("div"), { className: "sa-inspector-toolbar" });
+    tabBar = Object.assign(document.createElement("div"), { className: "sa-inspector-tabs" });
 
-    const title = Object.assign(document.createElement("span"), {
-      className: "sa-inspector-title",
-      textContent: msg("panel-title"),
+    const actions = Object.assign(document.createElement("div"), { className: "sa-inspector-toolbar-actions" });
+
+    const loadBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn",
+      title: msg("load-button"),
+      textContent: "📂",
     });
+    loadBtn.addEventListener("click", handleLoadSb3);
 
-    const copyBtn = Object.assign(document.createElement("button"), {
-      className: "sa-inspector-copy-btn",
-      textContent: msg("copy-button"),
+    const fetchBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn",
+      title: msg("fetch-button"),
+      textContent: "🔗",
     });
-    copyBtn.addEventListener("click", () => {
-      navigator.clipboard.writeText(content);
-      copyBtn.textContent = msg("copied");
-      setTimeout(() => (copyBtn.textContent = msg("copy-button")), 1500);
+    fetchBtn.addEventListener("click", handleFetchById);
+
+    compareBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn",
+      title: msg("compare-button"),
+      textContent: "📊",
     });
+    compareBtn.addEventListener("click", handleCompare);
+    compareBtn.hidden = true;
 
     const closeBtn = Object.assign(document.createElement("button"), {
       className: "sa-inspector-close-btn",
       textContent: "✕",
     });
-    closeBtn.addEventListener("click", () => panel.remove());
+    closeBtn.addEventListener("click", () => { panel.remove(); panel = null; });
 
-    header.append(title, copyBtn, closeBtn);
+    actions.append(loadBtn, fetchBtn, compareBtn, closeBtn);
+    toolbar.append(tabBar, actions);
 
-    const pre = Object.assign(document.createElement("pre"), {
-      className: "sa-inspector-content",
-      textContent: content,
+    // Body: code pre + overlay copy button
+    const body = Object.assign(document.createElement("div"), { className: "sa-inspector-body" });
+
+    contentEl = Object.assign(document.createElement("pre"), { className: "sa-inspector-content" });
+
+    overlayCopyBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-overlay-copy",
+      title: msg("copy-button"),
+      textContent: "📋",
     });
+    overlayCopyBtn.addEventListener("click", handleOverlayCopy);
 
-    panel.append(header, pre);
+    body.append(contentEl, overlayCopyBtn);
+    panel.append(toolbar, body);
     document.body.appendChild(panel);
+  }
+
+  function renderTabs() {
+    tabBar.innerHTML = "";
+    for (let i = 0; i < tabs.length; i++) {
+      const tabEl = Object.assign(document.createElement("button"), {
+        className: "sa-inspector-tab" + (i === activeTabIndex ? " sa-inspector-tab-active" : ""),
+      });
+      const labelSpan = Object.assign(document.createElement("span"), { textContent: tabs[i].label });
+      tabEl.appendChild(labelSpan);
+
+      if (i !== 0) {
+        const closeX = Object.assign(document.createElement("span"), {
+          className: "sa-inspector-tab-close",
+          textContent: "×",
+        });
+        closeX.addEventListener("click", (e) => { e.stopPropagation(); removeTab(i); });
+        tabEl.appendChild(closeX);
+      }
+
+      tabEl.addEventListener("click", () => switchTab(i));
+      tabBar.appendChild(tabEl);
+    }
+    compareBtn.hidden = tabs.length < 2;
+  }
+
+  function switchTab(index) {
+    activeTabIndex = index;
+    contentEl.textContent = tabs[index].content;
+    renderTabs();
+  }
+
+  function removeTab(index) {
+    tabs.splice(index, 1);
+    if (activeTabIndex >= tabs.length) activeTabIndex = tabs.length - 1;
+    contentEl.textContent = tabs[activeTabIndex].content;
+    renderTabs();
+  }
+
+  function upsertCurrentTab(content) {
+    if (tabs.length === 0) {
+      tabs.push({ label: msg("tab-current"), content });
+    } else {
+      tabs[0].content = content;
+    }
+  }
+
+  function addReferenceTab(label, content) {
+    tabs.push({ label, content });
+    activeTabIndex = tabs.length - 1;
+    contentEl.textContent = content;
+    renderTabs();
+  }
+
+  function handleOverlayCopy() {
+    navigator.clipboard.writeText(tabs[activeTabIndex]?.content ?? "");
+    overlayCopyBtn.textContent = "✓";
+    setTimeout(() => (overlayCopyBtn.textContent = "📋"), 1500);
+  }
+
+  function handleCompare() {
+    // Compare tab 0 (current) against the active tab, or tab 1 if current is active.
+    const refIndex = activeTabIndex === 0 ? 1 : activeTabIndex;
+    if (!tabs[refIndex]) return;
+    try {
+      const studentProject = getCurrentProjectFromVM();
+      const studentCode = projectToPseudocode(studentProject);
+      const prompt = buildComparisonPrompt(studentCode, tabs[refIndex].content, tabs[refIndex].label);
+      navigator.clipboard.writeText(prompt);
+      compareBtn.textContent = "✓";
+      setTimeout(() => (compareBtn.textContent = "📊"), 1500);
+    } catch (e) {
+      alert(msg("fetch-error", { error: String(e) }));
+    }
+  }
+
+  // ─── Toolbar click: refresh/open panel on current tab ─────────────────────
+
+  async function handleToolbarClick() {
+    toolbarBtn.disabled = true;
+    try {
+      const project = getCurrentProjectFromVM();
+      upsertCurrentTab(projectToPseudocode(project));
+      if (!panel || !document.body.contains(panel)) {
+        createPanel();
+      }
+      switchTab(0);
+      renderTabs();
+    } catch (e) {
+      alert(msg("fetch-error", { error: String(e) }));
+    } finally {
+      toolbarBtn.disabled = false;
+    }
   }
 
   // ─── Fetch & parse ─────────────────────────────────────────────────────────
 
-  async function handleInspect() {
-    const projectId = location.pathname.match(/\/projects\/(\d+)/)?.[1];
-    if (!projectId) {
-      alert(msg("no-project-id"));
-      return;
-    }
+  // Get the project currently loaded in the Scratch VM — includes unsaved changes.
+  function getCurrentProjectFromVM() {
+    const vm = addon.tab.redux.state?.scratchGui?.vm;
+    if (!vm) throw new Error("Scratch VM not available in Redux state");
+    return JSON.parse(vm.toJSON());
+  }
 
-    btn.textContent = msg("loading");
-    btn.disabled = true;
+  // Fetch a project by ID from the Scratch server.
+  async function fetchProjectById(projectId) {
+    const metaRes = await fetch(`https://api.scratch.mit.edu/projects/${projectId}`, {
+      credentials: "include",
+    });
+    if (!metaRes.ok) throw new Error(`Metadata API HTTP ${metaRes.status}`);
+    const meta = await metaRes.json();
+    const token = meta.project_token;
+    if (!token) throw new Error("No project_token in metadata response");
 
+    // No credentials on the second request — projects server returns CORS wildcard
+    const res = await fetch(`https://projects.scratch.mit.edu/${projectId}?token=${encodeURIComponent(token)}`);
+    if (!res.ok) throw new Error(`Project storage HTTP ${res.status}`);
+    return res.json();
+  }
+
+  async function handleFetchById() {
+    const input = prompt(msg("fetch-prompt"), location.pathname.match(/\/projects\/(\d+)/)?.[1] ?? "");
+    if (!input?.trim()) return;
+    const projectId = input.trim();
+    if (!panel || !document.body.contains(panel)) await handleToolbarClick();
     try {
-      // Step 1: get project token from the metadata API using x-token header
-      // (avoids credentials:include CORS issues with wildcard Access-Control-Allow-Origin)
-      const xToken = await addon.auth.fetchXToken();
-      const metaRes = await fetch(`https://api.scratch.mit.edu/projects/${projectId}`, {
-        headers: xToken ? { "x-token": xToken } : {},
-      });
-      if (!metaRes.ok) throw new Error(`Metadata API HTTP ${metaRes.status}`);
-      const meta = await metaRes.json();
-      const token = meta.project_token;
-      if (!token) throw new Error("No project_token in metadata response");
-
-      // Step 2: fetch project JSON — token in URL is sufficient, no credentials needed
-      const res = await fetch(`https://projects.scratch.mit.edu/${projectId}?token=${encodeURIComponent(token)}`);
-      if (!res.ok) throw new Error(`Project storage HTTP ${res.status}`);
-      const project = await res.json();
-      const pseudocode = projectToPseudocode(project);
-      showPanel(pseudocode);
+      const project = await fetchProjectById(projectId);
+      addReferenceTab(`#${projectId}`, projectToPseudocode(project));
     } catch (e) {
       alert(msg("fetch-error", { error: String(e) }));
-    } finally {
-      btn.textContent = msg("inspect-button");
-      btn.disabled = false;
     }
+  }
+
+  // Read project.json out of a local .sb3 file (ZIP) using only browser APIs.
+  // .sb3 is a ZIP file; project.json is always stored uncompressed or deflate-raw compressed.
+  async function readSb3File(file) {
+    const buf = await file.arrayBuffer();
+    const view = new DataView(buf);
+
+    // Locate the End-of-Central-Directory record (signature 0x06054b50) by scanning from the end.
+    let eocd = -1;
+    for (let i = buf.byteLength - 22; i >= 0; i--) {
+      if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd === -1) throw new Error("Not a valid ZIP file");
+
+    const cdOffset = view.getUint32(eocd + 16, true);
+    const cdCount  = view.getUint16(eocd + 8, true);
+
+    // Walk the Central Directory to find project.json.
+    let cdPos = cdOffset;
+    for (let i = 0; i < cdCount; i++) {
+      if (view.getUint32(cdPos, true) !== 0x02014b50) throw new Error("Bad central directory entry");
+      const compression  = view.getUint16(cdPos + 10, true);
+      const compSize     = view.getUint32(cdPos + 20, true);
+      const uncompSize   = view.getUint32(cdPos + 24, true);
+      const fnLen        = view.getUint16(cdPos + 28, true);
+      const extraLen     = view.getUint16(cdPos + 30, true);
+      const commentLen   = view.getUint16(cdPos + 32, true);
+      const localOffset  = view.getUint32(cdPos + 42, true);
+      const name = new TextDecoder().decode(new Uint8Array(buf, cdPos + 46, fnLen));
+      cdPos += 46 + fnLen + extraLen + commentLen;
+
+      if (name !== "project.json") continue;
+
+      // Found it — read the local file header to get the actual data offset.
+      const localExtraLen = view.getUint16(localOffset + 28, true);
+      const dataStart = localOffset + 30 + fnLen + localExtraLen;
+      const compData = new Uint8Array(buf, dataStart, compSize);
+
+      let jsonBytes;
+      if (compression === 0) {
+        // Stored (no compression)
+        jsonBytes = compData;
+      } else if (compression === 8) {
+        // Deflate — use DecompressionStream (Chrome 80+, Firefox 113+)
+        const ds = new DecompressionStream("deflate-raw");
+        const writer = ds.writable.getWriter();
+        writer.write(compData);
+        writer.close();
+        jsonBytes = new Uint8Array(await new Response(ds.readable).arrayBuffer());
+        if (jsonBytes.byteLength !== uncompSize) throw new Error("Decompression size mismatch");
+      } else {
+        throw new Error(`Unsupported ZIP compression method: ${compression}`);
+      }
+
+      return JSON.parse(new TextDecoder().decode(jsonBytes));
+    }
+    throw new Error('"project.json" not found in .sb3 file');
+  }
+
+  // Build a comparison prompt for an LLM given student and reference pseudocode.
+  function buildComparisonPrompt(studentCode, refCode, refName) {
+    const refLabel = refName ? `REFERENCE PROJECT (${refName})` : "REFERENCE PROJECT";
+    return [
+      "Compare the STUDENT PROJECT against the REFERENCE PROJECT below.",
+      "Match scripts by sprite name, hat block type, and structure — NOT by SCRIPT number.",
+      "Empty scripts in the reference are placeholders; ignore them.",
+      "",
+      "Report under exactly these headings, in this order:",
+      "1. Breaking bugs — changes almost certain to prevent the game working correctly (e.g. wrong condition, missing broadcast, wrong variable). List the most game-breaking first.",
+      "   IMPORTANT: check variable scope — variables listed under STAGE are global (for all sprites); variables listed under a SPRITE are local (for this sprite only). A variable that should be local but is global (or vice versa) is a common breaking bug in Scratch.",
+      "2. Likely bugs — code that looks wrong but might only affect some situations.",
+      "3. Missing scripts — scripts present in the reference but absent from the student project.",
+      "4. Intentional differences — things that differ but are probably deliberate. Keep this brief.",
+      "",
+      "Be specific: quote the block or sequence that differs.",
+      "",
+      "=".repeat(60),
+      "STUDENT PROJECT",
+      "=".repeat(60),
+      studentCode,
+      "",
+      "=".repeat(60),
+      refLabel,
+      "=".repeat(60),
+      refCode,
+    ].join("\n");
+  }
+
+  function handleLoadSb3() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".sb3,.sb2";
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      if (!panel || !document.body.contains(panel)) await handleToolbarClick();
+      try {
+        const project = await readSb3File(file);
+        const label = file.name.replace(/\.sb[23]$/i, "");
+        addReferenceTab(label, projectToPseudocode(project));
+      } catch (e) {
+        alert(msg("fetch-error", { error: String(e) }));
+      }
+    });
+    input.click();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -624,18 +855,32 @@ export default async function ({ addon, msg, console }) {
     const soundNames = (target.sounds ?? []).map((s) => s.name).join(", ");
     if (soundNames) lines.push(`  sounds: ${soundNames}`);
 
-    // Variables — label global (stage) vs local
-    const vars = Object.values(target.variables ?? {}).map(([name]) => name);
-    if (vars.length) {
+    // Variables — one per line with current value; floats rounded to 4 sig figs
+    const varEntries = Object.values(target.variables ?? {});
+    if (varEntries.length) {
       const label = isStage ? "variables (global)" : "variables (local)";
-      lines.push(`  ${label}: ${vars.join(", ")}`);
+      lines.push(`  ${label}:`);
+      for (const [name, value] of varEntries) {
+        let display;
+        if (typeof value === "number" || (typeof value === "string" && value !== "" && !isNaN(Number(value)))) {
+          const n = Number(value);
+          display = Number.isInteger(n) ? String(n) : String(parseFloat(n.toPrecision(4)));
+        } else {
+          const quoted = `"${value}"`;
+          display = quoted.length > 40 ? quoted.slice(0, 40) + "…\"" : quoted;
+        }
+        lines.push(`    ${name} = ${display}`);
+      }
     }
 
-    // Lists
-    const lists = Object.values(target.lists ?? {}).map(([name]) => name);
-    if (lists.length) {
+    // Lists — show name and item count only (contents omitted for brevity)
+    const listEntries = Object.values(target.lists ?? {});
+    if (listEntries.length) {
       const label = isStage ? "lists (global)" : "lists (local)";
-      lines.push(`  ${label}: ${lists.join(", ")}`);
+      lines.push(`  ${label}:`);
+      for (const [name, items] of listEntries) {
+        lines.push(`    ${name} (${Array.isArray(items) ? items.length : "?"} items)`);
+      }
     }
 
     lines.push("");
