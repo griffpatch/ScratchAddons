@@ -1,10 +1,13 @@
 {
   "scratch-project-inspector/inspect-button": "Inspect project",
+  "scratch-project-inspector/tab-matches": "🎯 Matches",
   "scratch-project-inspector/tab-current": "Current",
   "scratch-project-inspector/load-button": "Load .sb3 file",
   "scratch-project-inspector/fetch-button": "Fetch project by ID",
   "scratch-project-inspector/fetch-prompt": "Enter project ID or URL to fetch:",
   "scratch-project-inspector/compare-button": "Copy comparison prompt",
+  "scratch-project-inspector/goto-button": "Go to block by ID",
+  "scratch-project-inspector/import-button": "Import ChatGPT report as issues tab",
   "scratch-project-inspector/copy-button": "Copy",
   "scratch-project-inspector/copied": "Copied!",
   "scratch-project-inspector/loading": "Loading…",
