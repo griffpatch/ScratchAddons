@@ -1,4 +1,37 @@
 export default async function ({ addon, msg, console }) {
+  const { scrollBlockIntoViewIfNeeded, initializeSmoothScrolling } = await import(
+    "../../../libraries/common/cs/block-scrolling.js"
+  );
+
+  // Lazy Blockly init — only needed when navigating to a block.
+  // Avoids hanging on project pages that are not in editor mode.
+  let blocklyReady = false;
+  async function ensureBlocklyReady() {
+    if (blocklyReady) return;
+    const Blockly = await addon.tab.traps.getBlockly();
+    initializeSmoothScrolling(Blockly);
+    blocklyReady = true;
+  }
+
+  // ─── Flash a block's SVG path yellow 3 times ───────────────────────────────
+  let _flashTimer = 0;
+  let _flashBlock = null;
+  function flashBlock(block) {
+    if (_flashTimer) { clearTimeout(_flashTimer); }
+    const getPath = (b) => b?.pathObject?.svgPath ?? b?.svgPath_ ?? null;
+    let count = 4;
+    let on = true;
+    _flashBlock = block;
+    const _tick = () => {
+      const path = getPath(_flashBlock);
+      if (path) path.style.fill = on ? "#ffff80" : "";
+      on = !on;
+      count--;
+      if (count > 0) { _flashTimer = setTimeout(_tick, 200); }
+      else { _flashTimer = 0; if (path) path.style.fill = ""; _flashBlock = null; }
+    };
+    _tick();
+  }
   // ─── Toolbar button (single icon) ─────────────────────────────────────────
 
   const nav = await addon.tab.waitForElement("[class*='menu-bar_account-info-group_'] > [href^='/mystuff']", {
@@ -19,72 +52,526 @@ export default async function ({ addon, msg, console }) {
 
   // ─── Panel state ───────────────────────────────────────────────────────────
 
-  // tabs[0] is always the Current project; subsequent tabs are loaded references.
-  const tabs = []; // [{ label: string, content: string }]
+  // ─── Library DB ─────────────────────────────────────────────────────────────
+
+  const DB_NAME = "sa-inspector-library";
+  const DB_STORE = "episodes";
+  let _db = null;
+
+  async function openDB() {
+    if (_db) return _db;
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(DB_STORE)) {
+          db.createObjectStore(DB_STORE, { keyPath: "id" });
+        }
+      };
+      req.onsuccess = (e) => { _db = e.target.result; resolve(_db); };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function dbSaveEpisode(ep) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).put(ep);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function dbGetAll() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const req = db.transaction(DB_STORE, "readonly").objectStore(DB_STORE).getAll();
+      req.onsuccess = () => resolve(req.result ?? []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function dbDelete(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  // ─── Fingerprinting & scoring ─────────────────────────────────────────────
+
+  // Collect all opcodes reachable from a top-level block (DFS: inputs then next).
+  function collectOpcodes(blocks, startId) {
+    const opcodes = [];
+    const seen = new Set();
+    const visit = (id) => {
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      const b = blocks[id];
+      if (!b || b.shadow) return;
+      opcodes.push(b.opcode);
+      for (const input of Object.values(b.inputs ?? {})) {
+        if (typeof input[1] === "string") visit(input[1]);
+      }
+      if (b.next) visit(b.next);
+    };
+    visit(startId);
+    return opcodes;
+  }
+
+  // Build a fingerprint: array of sprite descriptors with opcode bags.
+  function fingerprintProject(project) {
+    return (project.targets ?? []).map((target) => {
+      const blocks = target.blocks ?? {};
+      const topIds = Object.keys(blocks).filter((id) => blocks[id].topLevel && !blocks[id].shadow);
+      const allOpcodes = topIds.flatMap((id) => collectOpcodes(blocks, id));
+      return { name: target.name, isStage: !!target.isStage, allOpcodes };
+    });
+  }
+
+  // Jaccard similarity on two opcode arrays treated as multisets.
+  function jaccardMultiset(a, b) {
+    if (a.length === 0 && b.length === 0) return 1;
+    const ca = {}, cb = {};
+    for (const x of a) ca[x] = (ca[x] ?? 0) + 1;
+    for (const x of b) cb[x] = (cb[x] ?? 0) + 1;
+    const keys = new Set([...Object.keys(ca), ...Object.keys(cb)]);
+    let inter = 0, union = 0;
+    for (const k of keys) {
+      inter += Math.min(ca[k] ?? 0, cb[k] ?? 0);
+      union += Math.max(ca[k] ?? 0, cb[k] ?? 0);
+    }
+    return union === 0 ? 0 : inter / union;
+  }
+
+  // Score a current project fingerprint against an episode fingerprint.
+  // Returns { score 0-1, spritesMatched, spriteCount }.
+  function scoreAgainst(currentFP, episodeFP) {
+    const relevant = episodeFP.filter((s) => s.allOpcodes.length > 0);
+    if (relevant.length === 0) return { score: 0, spritesMatched: 0, spriteCount: 0 };
+    let total = 0, matched = 0;
+    for (const ref of relevant) {
+      let best = 0;
+      for (const cur of currentFP) {
+        const s = jaccardMultiset(cur.allOpcodes, ref.allOpcodes);
+        if (s > best) best = s;
+      }
+      total += best;
+      if (best > 0.15) matched++;
+    }
+    return { score: total / relevant.length, spritesMatched: matched, spriteCount: relevant.length };
+  }
+
+  // ─── Panel state ─────────────────────────────────────────────────────────────
+
+  // tabs[0] = Current (permanent); tabs[1] = Compare (permanent, chooser/reference states); tabs[2+] = Issues (closeable)
+  const tabs = [];
   let activeTabIndex = 0;
   let panel = null;
   let tabBar = null;
-  let contentEl = null;
-  let compareBtn = null;
+  let textContent = null;   // <pre> for Current tab
+  let currentHeader = null;  // header bar above current pseudocode
+  let currentWrap = null;    // column wrapper: currentHeader + textContent
+  let compareContent = null; // <div> for Compare tab
+  let issuesContent = null;  // <div> for Issues tabs
   let overlayCopyBtn = null;
+  let currentFingerprint = null;
+  let currentMatchSort = "relevance";
 
   // ─── Panel builder ─────────────────────────────────────────────────────────
 
   function createPanel() {
     panel = Object.assign(document.createElement("div"), { className: "sa-inspector-panel" });
 
-    // Toolbar: tab strip + action buttons
+    // Toolbar: tab strip + close button only
     const toolbar = Object.assign(document.createElement("div"), { className: "sa-inspector-toolbar" });
     tabBar = Object.assign(document.createElement("div"), { className: "sa-inspector-tabs" });
 
     const actions = Object.assign(document.createElement("div"), { className: "sa-inspector-toolbar-actions" });
-
-    const loadBtn = Object.assign(document.createElement("button"), {
-      className: "sa-inspector-action-btn",
-      title: msg("load-button"),
-      textContent: "📂",
-    });
-    loadBtn.addEventListener("click", handleLoadSb3);
-
-    const fetchBtn = Object.assign(document.createElement("button"), {
-      className: "sa-inspector-action-btn",
-      title: msg("fetch-button"),
-      textContent: "🔗",
-    });
-    fetchBtn.addEventListener("click", handleFetchById);
-
-    compareBtn = Object.assign(document.createElement("button"), {
-      className: "sa-inspector-action-btn",
-      title: msg("compare-button"),
-      textContent: "📊",
-    });
-    compareBtn.addEventListener("click", handleCompare);
-    compareBtn.hidden = true;
-
     const closeBtn = Object.assign(document.createElement("button"), {
       className: "sa-inspector-close-btn",
       textContent: "✕",
     });
     closeBtn.addEventListener("click", () => { panel.remove(); panel = null; });
-
-    actions.append(loadBtn, fetchBtn, compareBtn, closeBtn);
+    actions.appendChild(closeBtn);
     toolbar.append(tabBar, actions);
 
-    // Body: code pre + overlay copy button
+    // Body: three content areas, one visible at a time
     const body = Object.assign(document.createElement("div"), { className: "sa-inspector-body" });
 
-    contentEl = Object.assign(document.createElement("pre"), { className: "sa-inspector-content" });
+    textContent = Object.assign(document.createElement("pre"), { className: "sa-inspector-content" });
+
+    // Header bar for Current tab: bug description input
+    currentHeader = Object.assign(document.createElement("div"), { className: "sa-inspector-compare-ref-header" });
+    const bugInput = Object.assign(document.createElement("input"), {
+      type: "text",
+      className: "sa-inspector-bug-input",
+      placeholder: "Describe the bug to investigate…",
+    });
+    const bugBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn",
+      textContent: "🔍 Ask ChatGPT",
+    });
+    const triggerBugPrompt = () => {
+      const desc = bugInput.value.trim();
+      if (!desc) return;
+      try {
+        const project = getCurrentProjectFromVM();
+        void navigator.clipboard.writeText(buildBugPrompt(projectToPseudocode(project), desc));
+      } catch (e) {
+        alert(msg("fetch-error", { error: String(e) }));
+        return;
+      }
+      tabs.push({ type: "issues", label: "🐛 Bug", issueState: "paste", content: "", cards: [] });
+      switchTab(tabs.length - 1);
+      renderTabs();
+      bugInput.value = "";
+    };
+    bugBtn.addEventListener("click", triggerBugPrompt);
+    bugInput.addEventListener("keydown", (e) => { if (e.key === "Enter") triggerBugPrompt(); });
+    currentHeader.append(bugInput, bugBtn);
+
+    compareContent = Object.assign(document.createElement("div"), { className: "sa-inspector-content sa-inspector-matches" });
+    compareContent.style.display = "none";
+
+    issuesContent = Object.assign(document.createElement("div"), { className: "sa-inspector-content sa-inspector-issues" });
+    issuesContent.style.display = "none";
 
     overlayCopyBtn = Object.assign(document.createElement("button"), {
       className: "sa-inspector-overlay-copy",
       title: msg("copy-button"),
       textContent: "📋",
     });
-    overlayCopyBtn.addEventListener("click", handleOverlayCopy);
+    overlayCopyBtn.style.display = "none";
+    overlayCopyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(tabs[activeTabIndex]?.content ?? "");
+      overlayCopyBtn.textContent = "✓";
+      setTimeout(() => (overlayCopyBtn.textContent = "📋"), 1500);
+    });
 
-    body.append(contentEl, overlayCopyBtn);
+    // Wrap currentHeader + textContent in a column so header sits above code
+    currentWrap = Object.assign(document.createElement("div"), { className: "sa-inspector-current-wrap" });
+    currentWrap.style.display = "none";
+    currentWrap.append(currentHeader, textContent);
+
+    body.append(currentWrap, compareContent, issuesContent, overlayCopyBtn);
     panel.append(toolbar, body);
     document.body.appendChild(panel);
+  }
+
+  function applyTab(index) {
+    const tab = tabs[index];
+    if (!tab) return;
+    const isCurrent = tab.type === "current";
+    const isCompare = tab.type === "compare";
+    const isIssues = tab.type === "issues";
+    currentWrap.style.display = isCurrent ? "" : "none";
+    compareContent.style.display = isCompare ? "" : "none";
+    issuesContent.style.display = isIssues ? "" : "none";
+    overlayCopyBtn.style.display = isCurrent ? "" : "none";
+    if (isCurrent) textContent.textContent = tab.content ?? "";
+    if (isCompare) void renderCompareTab(tab);
+    if (isIssues) renderIssuesContent(tab);
+  }
+
+  // ─── Compare tab rendering ────────────────────────────────────────────────
+
+  async function renderCompareTab(tab) {
+    compareContent.innerHTML = "";
+    if (tab.compareState === "reference") {
+      renderCompareReference(tab);
+    } else {
+      await renderCompareChooser(tab);
+    }
+  }
+
+  async function renderCompareChooser(tab) {
+    // Controls row: sort + save-episode button
+    const controls = Object.assign(document.createElement("div"), { className: "sa-inspector-matches-controls" });
+    const sortLabel = Object.assign(document.createElement("span"), {
+      className: "sa-inspector-matches-sort-label",
+      textContent: "Sort: ",
+    });
+    const sortSelect = Object.assign(document.createElement("select"), { className: "sa-inspector-matches-sort" });
+    for (const [val, lbl] of [["relevance", "By relevance"], ["tutorial", "By tutorial"]]) {
+      const opt = Object.assign(document.createElement("option"), { value: val, textContent: lbl });
+      if (val === currentMatchSort) opt.selected = true;
+      sortSelect.appendChild(opt);
+    }
+    sortSelect.addEventListener("change", () => {
+      currentMatchSort = sortSelect.value;
+      void renderCompareChooser(tab);
+    });
+    const saveEpBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn sa-inspector-matches-import-btn",
+      textContent: "💾 Add episode to DB",
+    });
+    saveEpBtn.addEventListener("click", handleImportEpisode);
+    controls.append(sortLabel, sortSelect, saveEpBtn);
+    compareContent.appendChild(controls);
+
+    // Library match rows
+    const episodes = await dbGetAll();
+    if (episodes.length === 0) {
+      compareContent.appendChild(Object.assign(document.createElement("p"), {
+        className: "sa-inspector-matches-empty",
+        textContent: "No episodes saved yet. Load a reference .sb3 below and click 💾 Save episode to add it.",
+      }));
+    } else {
+      const results = episodes.map((ep) => ({
+        episode: ep,
+        ...scoreAgainst(currentFingerprint ?? [], ep.fingerprint ?? []),
+      }));
+      const sorted = [...results].sort(currentMatchSort === "relevance"
+        ? (a, b) => b.score - a.score
+        : (a, b) => (a.episode.tutorial + a.episode.label).localeCompare(b.episode.tutorial + b.episode.label)
+      );
+      for (const result of sorted) {
+        compareContent.appendChild(buildMatchRow(result.episode, currentFingerprint ? result : null));
+      }
+    }
+
+    // Load / Fetch section
+    const divider = Object.assign(document.createElement("div"), { className: "sa-inspector-compare-divider" });
+    compareContent.appendChild(divider);
+    const loadSection = Object.assign(document.createElement("div"), { className: "sa-inspector-compare-load-section" });
+    const loadBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn sa-inspector-compare-load-btn",
+      textContent: "📂 Load .sb3 file",
+    });
+    loadBtn.addEventListener("click", handleLoadSb3);
+    const fetchBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn sa-inspector-compare-load-btn",
+      textContent: "🔗 Fetch project by ID",
+    });
+    fetchBtn.addEventListener("click", handleFetchById);
+    loadSection.append(loadBtn, fetchBtn);
+    compareContent.appendChild(loadSection);
+  }
+
+  function renderCompareReference(tab) {
+    const header = Object.assign(document.createElement("div"), { className: "sa-inspector-compare-ref-header" });
+    const labelEl = Object.assign(document.createElement("span"), {
+      className: "sa-inspector-compare-ref-label",
+      textContent: tab.referenceLabel ?? "Reference",
+    });
+    const analyzeBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn",
+      textContent: "📊 Copy & open issues tab",
+    });
+    analyzeBtn.addEventListener("click", () => handleCopyAndAnalyze(tab));
+    header.append(labelEl, analyzeBtn);
+    compareContent.appendChild(header);
+
+    const pre = Object.assign(document.createElement("pre"), {
+      className: "sa-inspector-compare-ref-pre",
+      textContent: tab.referenceContent ?? "",
+    });
+    compareContent.appendChild(pre);
+  }
+
+  function loadCompareReference(label, content) {
+    const compareTab = tabs.find((t) => t.type === "compare");
+    if (!compareTab) return;
+    compareTab.compareState = "reference";
+    compareTab.referenceLabel = label;
+    compareTab.referenceContent = content;
+    switchTab(tabs.indexOf(compareTab));
+    renderTabs();
+  }
+
+  function revertCompareToChooser() {
+    const compareTab = tabs.find((t) => t.type === "compare");
+    if (!compareTab) return;
+    compareTab.compareState = "chooser";
+    compareTab.referenceLabel = "";
+    compareTab.referenceContent = "";
+    const idx = tabs.indexOf(compareTab);
+    if (activeTabIndex === idx) {
+      void renderCompareTab(compareTab);
+    } else {
+      switchTab(idx);
+    }
+    renderTabs();
+  }
+
+  function handleCopyAndAnalyze(tab) {
+    try {
+      const studentProject = getCurrentProjectFromVM();
+      const studentCode = projectToPseudocode(studentProject);
+      const prompt = buildComparisonPrompt(studentCode, tab.referenceContent, tab.referenceLabel);
+      void navigator.clipboard.writeText(prompt);
+    } catch (e) {
+      alert(msg("fetch-error", { error: String(e) }));
+      return;
+    }
+    // Open a fresh Issues tab ready to paste the ChatGPT response into
+    tabs.push({ type: "issues", label: "⚠️ Issues", issueState: "paste", content: "", cards: [] });
+    switchTab(tabs.length - 1);
+    renderTabs();
+  }
+
+  function buildMatchRow(ep, result) {
+    const row = Object.assign(document.createElement("div"), { className: "sa-inspector-match-row" });
+    const info = Object.assign(document.createElement("div"), { className: "sa-inspector-match-info" });
+    info.appendChild(Object.assign(document.createElement("div"), {
+      className: "sa-inspector-match-title",
+      textContent: `${ep.tutorial} — ${ep.label}`,
+    }));
+    if (result) {
+      const pct = Math.round(result.score * 100);
+      info.appendChild(Object.assign(document.createElement("div"), {
+        className: "sa-inspector-match-subtitle",
+        textContent: `${result.spritesMatched}/${result.spriteCount} sprites matched`,
+      }));
+      const barWrap = Object.assign(document.createElement("div"), { className: "sa-inspector-match-bar-wrap" });
+      const barTrack = Object.assign(document.createElement("div"), { className: "sa-inspector-match-bar-track" });
+      const bar = Object.assign(document.createElement("div"), { className: "sa-inspector-match-bar" });
+      bar.style.width = `${Math.round(pct * 1.2)}px`; // 120px track × pct/100
+      bar.style.background = pct > 60 ? "#a6e3a1" : pct > 30 ? "#f9e2af" : "#f38ba8";
+      barTrack.appendChild(bar);
+      barWrap.append(barTrack, Object.assign(document.createElement("span"), {
+        className: "sa-inspector-match-pct",
+        textContent: `${pct}%`,
+      }));
+      info.appendChild(barWrap);
+    }
+    const btns = Object.assign(document.createElement("div"), { className: "sa-inspector-match-btns" });
+    const openBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-issue-go-btn",
+      textContent: "Open",
+    });
+    openBtn.addEventListener("click", () => loadCompareReference(ep.label, ep.pseudocode));
+    const delBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-issue-go-btn sa-inspector-match-del",
+      title: "Remove from library",
+      textContent: "✕",
+    });
+    delBtn.addEventListener("click", async () => {
+      if (confirm(`Remove "${ep.tutorial} — ${ep.label}" from library?`)) {
+        await dbDelete(ep.id);
+        const compareTab = tabs.find((t) => t.type === "compare");
+        if (compareTab && compareTab.compareState === "chooser") void renderCompareTab(compareTab);
+      }
+    });
+    btns.append(openBtn, delBtn);
+    row.append(info, btns);
+    return row;
+  }
+
+  async function handleImportEpisode() {
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = ".sb3,.sb2";
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      try {
+        const project = await readSb3File(file);
+        const defaultName = file.name.replace(/\.sb[23]$/i, "");
+        const tutorial = (prompt("Tutorial name (e.g. 'Space Shooter'):", "") ?? "").trim();
+        if (!tutorial) return;
+        const label = (prompt("Episode label (e.g. 'Ep 3 – Enemies'):", defaultName) ?? "").trim();
+        if (!label) return;
+        await dbSaveEpisode({
+          id: crypto.randomUUID(),
+          tutorial,
+          label,
+          pseudocode: projectToPseudocode(project),
+          fingerprint: fingerprintProject(project),
+          createdAt: Date.now(),
+        });
+        const compareTab = tabs.find((t) => t.type === "compare");
+        if (compareTab && compareTab.compareState === "chooser") void renderCompareTab(compareTab);
+      } catch (e) {
+        alert(`Import failed: ${e}`);
+      }
+    });
+    fileInput.click();
+  }
+
+  // ─── Issues tab rendering ─────────────────────────────────────────────────
+
+  function renderIssuesContent(tab) {
+    issuesContent.innerHTML = "";
+    if (tab.issueState === "paste") {
+      issuesContent.appendChild(Object.assign(document.createElement("p"), {
+        className: "sa-inspector-matches-empty",
+        textContent: "Paste the ChatGPT response below:",
+      }));
+      const pasteArea = Object.assign(document.createElement("textarea"), {
+        className: "sa-inspector-paste-area",
+        placeholder: "Paste ChatGPT response here…",
+        rows: 12,
+      });
+      const parseBtn = Object.assign(document.createElement("button"), {
+        className: "sa-inspector-action-btn sa-inspector-parse-btn",
+        textContent: "Parse report",
+      });
+      const doParseAndRender = () => {
+        const text = pasteArea.value.trim();
+        if (!text) return;
+        const cards = parseReport(text);
+        if (cards.length === 0) { alert("No citation blocks found."); return; }
+        tab.issueState = "cards";
+        tab.content = text;
+        tab.cards = cards;
+        renderIssuesContent(tab);
+      };
+      parseBtn.addEventListener("click", doParseAndRender);
+      pasteArea.addEventListener("paste", () => setTimeout(doParseAndRender, 0));
+      issuesContent.append(pasteArea, parseBtn);
+    } else {
+      for (const card of tab.cards ?? []) {
+        if (card.type === "section") {
+          issuesContent.appendChild(Object.assign(document.createElement("h3"), {
+            className: "sa-inspector-issue-section",
+            textContent: card.text,
+          }));
+        } else {
+          const el = document.createElement("div");
+          el.className = "sa-inspector-issue-card";
+          const cardHeader = Object.assign(document.createElement("div"), { className: "sa-inspector-issue-card-header" });
+          cardHeader.append(
+            Object.assign(document.createElement("span"), { className: "sa-inspector-issue-card-title", textContent: card.title }),
+            Object.assign(Object.assign(document.createElement("button"), { className: "sa-inspector-issue-go-btn", textContent: "🎯 Go" }),
+              { onclick: () => void handleGotoBlock(card.raw, el) })
+          );
+          el.append(cardHeader, Object.assign(document.createElement("pre"), {
+            className: "sa-inspector-issue-evidence",
+            textContent: card.evidence,
+          }));
+          issuesContent.appendChild(el);
+        }
+      }
+    }
+  }
+
+  // Parse a full ChatGPT report into section headers + citation cards.
+  function parseReport(text) {
+    const cards = [];
+    const segments = text.split(/```[\w]*\n?/);
+    for (let i = 0; i < segments.length; i++) {
+      if (i % 2 === 0) {
+        for (const line of segments[i].split("\n")) {
+          const m = line.match(/^#+\s*(.+)/) ?? line.match(/^\d+\.\s+(.+)/);
+          if (m) cards.push({ type: "section", text: m[1].trim() });
+        }
+      } else {
+        const raw = segments[i].replace(/\n?```$/, "").trim();
+        const lines = raw.split("\n");
+        const firstLine = lines[0] ?? "";
+        if (firstLine.includes("→")) {
+          const title = firstLine.replace(/\[\u2192[^\]]*\]/, "").replace(/\s*\|\s*$/, "").trim();
+          cards.push({ type: "citation", title, evidence: lines.slice(1).join("\n").trim(), raw });
+        }
+      }
+    }
+    return cards;
   }
 
   function renderTabs() {
@@ -93,84 +580,100 @@ export default async function ({ addon, msg, console }) {
       const tabEl = Object.assign(document.createElement("button"), {
         className: "sa-inspector-tab" + (i === activeTabIndex ? " sa-inspector-tab-active" : ""),
       });
-      const labelSpan = Object.assign(document.createElement("span"), { textContent: tabs[i].label });
-      tabEl.appendChild(labelSpan);
+      tabEl.appendChild(Object.assign(document.createElement("span"), { textContent: tabs[i].label }));
 
-      if (i !== 0) {
+      // Current tab (0) is always permanent; Compare tab (1) has ✕ only when showing a reference
+      const isCurrentTab = tabs[i].type === "current";
+      const isCompareChooser = tabs[i].type === "compare" && tabs[i].compareState !== "reference";
+      if (!isCurrentTab && !isCompareChooser) {
         const closeX = Object.assign(document.createElement("span"), {
           className: "sa-inspector-tab-close",
           textContent: "×",
         });
-        closeX.addEventListener("click", (e) => { e.stopPropagation(); removeTab(i); });
+        closeX.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (tabs[i].type === "compare") { revertCompareToChooser(); } else { removeTab(i); }
+        });
         tabEl.appendChild(closeX);
       }
 
       tabEl.addEventListener("click", () => switchTab(i));
       tabBar.appendChild(tabEl);
     }
-    compareBtn.hidden = tabs.length < 2;
   }
 
   function switchTab(index) {
     activeTabIndex = index;
-    contentEl.textContent = tabs[index].content;
+    applyTab(index);
     renderTabs();
   }
 
   function removeTab(index) {
+    if (index <= 1) return; // Current and Compare are permanent
     tabs.splice(index, 1);
     if (activeTabIndex >= tabs.length) activeTabIndex = tabs.length - 1;
-    contentEl.textContent = tabs[activeTabIndex].content;
+    applyTab(activeTabIndex);
     renderTabs();
   }
 
   function upsertCurrentTab(content) {
-    if (tabs.length === 0) {
-      tabs.push({ label: msg("tab-current"), content });
+    const idx = tabs.findIndex((t) => t.type === "current");
+    if (idx === -1) {
+      tabs.unshift({ type: "current", label: msg("tab-current"), content });
     } else {
-      tabs[0].content = content;
+      tabs[idx].content = content;
     }
   }
 
-  function addReferenceTab(label, content) {
-    tabs.push({ label, content });
-    activeTabIndex = tabs.length - 1;
-    contentEl.textContent = content;
-    renderTabs();
-  }
-
-  function handleOverlayCopy() {
-    navigator.clipboard.writeText(tabs[activeTabIndex]?.content ?? "");
-    overlayCopyBtn.textContent = "✓";
-    setTimeout(() => (overlayCopyBtn.textContent = "📋"), 1500);
-  }
-
-  function handleCompare() {
-    // Compare tab 0 (current) against the active tab, or tab 1 if current is active.
-    const refIndex = activeTabIndex === 0 ? 1 : activeTabIndex;
-    if (!tabs[refIndex]) return;
-    try {
-      const studentProject = getCurrentProjectFromVM();
-      const studentCode = projectToPseudocode(studentProject);
-      const prompt = buildComparisonPrompt(studentCode, tabs[refIndex].content, tabs[refIndex].label);
-      navigator.clipboard.writeText(prompt);
-      compareBtn.textContent = "✓";
-      setTimeout(() => (compareBtn.textContent = "📊"), 1500);
-    } catch (e) {
-      alert(msg("fetch-error", { error: String(e) }));
+  function ensureCompareTabs() {
+    if (!tabs.some((t) => t.type === "compare")) {
+      const insertAt = Math.max(1, tabs.findIndex((t) => t.type === "current") + 1);
+      tabs.splice(insertAt, 0, {
+        type: "compare", label: "Compare", compareState: "chooser",
+        referenceContent: "", referenceLabel: "",
+      });
     }
   }
 
-  // ─── Toolbar click: refresh/open panel on current tab ─────────────────────
+  async function handleGotoBlock(raw, cardEl = null) {
+    await ensureBlocklyReady();
+    const stripped = raw.trim()
+      .replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "").trim();
+    const lines = stripped.split("\n");
+    const firstLine = lines[0] ?? "";
+    const idMatch = firstLine.match(/\[\u2192\s*([^\]]+)\]/);
+    const blockId = idMatch ? idMatch[1].trim() : stripped.replace(/^\[\u2192\s*/, "").replace(/\]$/, "").trim();
+    const spriteName = firstLine.split("|")[0].trim();
+    const vm = addon.tab.redux.state?.scratchGui?.vm;
+    if (vm && spriteName) {
+      const target = vm.runtime.targets.find((t) => !t.isStage && t.getName() === spriteName)
+        ?? vm.runtime.targets.find((t) => !t.isStage && t.getName().toLowerCase() === spriteName.toLowerCase());
+      if (target && target.id !== vm.editingTarget?.id) {
+        vm.setEditingTarget(target.id);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    const workspace = addon.tab.traps.getWorkspace();
+    if (!workspace) { alert("No Scratch workspace found — is the project open in editor mode?"); return; }
+    const block = workspace.getBlockById(blockId);
+    if (!block) { alert(`Block not found: ${blockId}`); return; }
+    scrollBlockIntoViewIfNeeded(workspace, block, 64, 64, false).then(() => flashBlock(block));
+    if (cardEl) {
+      issuesContent.querySelectorAll(".sa-inspector-issue-card").forEach((c) => c.classList.remove("sa-inspector-card-active"));
+      cardEl.classList.add("sa-inspector-card-active");
+    }
+  }
+
+  // ─── Toolbar click ─────────────────────────────────────────────────────────
 
   async function handleToolbarClick() {
     toolbarBtn.disabled = true;
     try {
       const project = getCurrentProjectFromVM();
+      currentFingerprint = fingerprintProject(project);
       upsertCurrentTab(projectToPseudocode(project));
-      if (!panel || !document.body.contains(panel)) {
-        createPanel();
-      }
+      ensureCompareTabs();
+      if (!panel || !document.body.contains(panel)) createPanel();
       switchTab(0);
       renderTabs();
     } catch (e) {
@@ -209,10 +712,9 @@ export default async function ({ addon, msg, console }) {
     const input = prompt(msg("fetch-prompt"), location.pathname.match(/\/projects\/(\d+)/)?.[1] ?? "");
     if (!input?.trim()) return;
     const projectId = input.trim();
-    if (!panel || !document.body.contains(panel)) await handleToolbarClick();
     try {
       const project = await fetchProjectById(projectId);
-      addReferenceTab(`#${projectId}`, projectToPseudocode(project));
+      loadCompareReference(`#${projectId}`, projectToPseudocode(project));
     } catch (e) {
       alert(msg("fetch-error", { error: String(e) }));
     }
@@ -277,6 +779,26 @@ export default async function ({ addon, msg, console }) {
   }
 
   // Build a comparison prompt for an LLM given student and reference pseudocode.
+  function buildBugPrompt(studentCode, bugDescription) {
+    return [
+      `I'm investigating a possible bug in a Scratch project. The bug I'm trying to understand is:`,
+      `"${bugDescription}"`,
+      "",
+      "Below is the full project as pseudocode. Please:",
+      "1. Identify the most likely cause of this bug in the code.",
+      "2. Explain exactly what the code does vs. what it should do.",
+      "3. Cite any relevant scripts using fenced code blocks. The first line of each block must be:",
+      "   SpriteName | hat block description | [→ blockId]",
+      "   Subsequent lines show the relevant pseudocode and what is wrong.",
+      "4. If there are other closely related bugs you notice, mention them briefly at the end.",
+      "",
+      "=".repeat(60),
+      "PROJECT",
+      "=".repeat(60),
+      studentCode,
+    ].join("\n");
+  }
+
   function buildComparisonPrompt(studentCode, refCode, refName) {
     const refLabel = refName ? `REFERENCE PROJECT (${refName})` : "REFERENCE PROJECT";
     return [
@@ -291,7 +813,13 @@ export default async function ({ addon, msg, console }) {
       "3. Missing scripts — scripts present in the reference but absent from the student project.",
       "4. Intentional differences — things that differ but are probably deliberate. Keep this brief.",
       "",
-      "Be specific: quote the block or sequence that differs.",
+      "When citing a bug, always wrap the evidence in a fenced code block. The first line must be: SpriteName | hat block description | [→ blockId]",
+      "Subsequent lines show the relevant pseudocode and what is wrong. Example:",
+      "\`\`\`",
+      "Laser | when I start as a clone | [→ -P|Ws|MMN@a3)1rr`2N9]",
+      "change x by (ShakeDY)   ← should be ShakeDX",
+      "\`\`\`",
+      "Be specific about what differs from the reference.",
       "",
       "=".repeat(60),
       "STUDENT PROJECT",
@@ -312,11 +840,10 @@ export default async function ({ addon, msg, console }) {
     input.addEventListener("change", async () => {
       const file = input.files?.[0];
       if (!file) return;
-      if (!panel || !document.body.contains(panel)) await handleToolbarClick();
       try {
         const project = await readSb3File(file);
         const label = file.name.replace(/\.sb[23]$/i, "");
-        addReferenceTab(label, projectToPseudocode(project));
+        loadCompareReference(label, projectToPseudocode(project));
       } catch (e) {
         alert(msg("fetch-error", { error: String(e) }));
       }
@@ -894,7 +1421,7 @@ export default async function ({ addon, msg, console }) {
       const topBlock = blocks[scriptId];
       if (!topBlock) continue;
 
-      lines.push(`  SCRIPT #${scriptNum + 1}:`);
+      lines.push(`  SCRIPT #${scriptNum + 1}:  [→ ${scriptId}]`);
 
       // Render hat / definition header, indented under SCRIPT label
       if (topBlock.opcode === "procedures_definition") {
