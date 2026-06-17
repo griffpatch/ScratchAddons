@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "node",
+    "allowJs": true,
+    "checkJs": false,
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "lib": ["ES2020", "DOM"],
+    "typeRoots": ["./node_modules/@types", "./types"],
+    "baseUrl": ".",
+    "paths": {
+      "@types/*": ["./types/*"],
+      "*": ["./node_modules/@types/*"]
+    }
+  },
+  "include": ["**/*.js", "types/**/*.js", "types/**/*.d.ts"],
+  "exclude": ["node_modules"]
+}

@@ -1,7 +1,8 @@
 export default async function ({ addon, msg, console }) {
-  const { scrollBlockIntoViewIfNeeded, initializeSmoothScrolling } = await import(
-    "../../../libraries/common/cs/block-scrolling.js"
-  );
+  const { scrollBlockIntoViewIfNeeded, initializeSmoothScrolling } =
+    await import("../../../libraries/common/cs/block-scrolling.js");
+  const { parsePseudocode } = await import("./pseudocode-parser.js");
+  const { astToBlocks } = await import("./ast-to-blocks.js");
 
   // Lazy Blockly init — only needed when navigating to a block.
   // Avoids hanging on project pages that are not in editor mode.
@@ -17,7 +18,9 @@ export default async function ({ addon, msg, console }) {
   let _flashTimer = 0;
   let _flashBlock = null;
   function flashBlock(block) {
-    if (_flashTimer) { clearTimeout(_flashTimer); }
+    if (_flashTimer) {
+      clearTimeout(_flashTimer);
+    }
     const getPath = (b) => b?.pathObject?.svgPath ?? b?.svgPath_ ?? null;
     let count = 4;
     let on = true;
@@ -27,8 +30,13 @@ export default async function ({ addon, msg, console }) {
       if (path) path.style.fill = on ? "#ffff80" : "";
       on = !on;
       count--;
-      if (count > 0) { _flashTimer = setTimeout(_tick, 200); }
-      else { _flashTimer = 0; if (path) path.style.fill = ""; _flashBlock = null; }
+      if (count > 0) {
+        _flashTimer = setTimeout(_tick, 200);
+      } else {
+        _flashTimer = 0;
+        if (path) path.style.fill = "";
+        _flashBlock = null;
+      }
     };
     _tick();
   }
@@ -68,7 +76,10 @@ export default async function ({ addon, msg, console }) {
           db.createObjectStore(DB_STORE, { keyPath: "id" });
         }
       };
-      req.onsuccess = (e) => { _db = e.target.result; resolve(_db); };
+      req.onsuccess = (e) => {
+        _db = e.target.result;
+        resolve(_db);
+      };
       req.onerror = () => reject(req.error);
     });
   }
@@ -136,11 +147,13 @@ export default async function ({ addon, msg, console }) {
   // Jaccard similarity on two opcode arrays treated as multisets.
   function jaccardMultiset(a, b) {
     if (a.length === 0 && b.length === 0) return 1;
-    const ca = {}, cb = {};
+    const ca = {},
+      cb = {};
     for (const x of a) ca[x] = (ca[x] ?? 0) + 1;
     for (const x of b) cb[x] = (cb[x] ?? 0) + 1;
     const keys = new Set([...Object.keys(ca), ...Object.keys(cb)]);
-    let inter = 0, union = 0;
+    let inter = 0,
+      union = 0;
     for (const k of keys) {
       inter += Math.min(ca[k] ?? 0, cb[k] ?? 0);
       union += Math.max(ca[k] ?? 0, cb[k] ?? 0);
@@ -153,7 +166,8 @@ export default async function ({ addon, msg, console }) {
   function scoreAgainst(currentFP, episodeFP) {
     const relevant = episodeFP.filter((s) => s.allOpcodes.length > 0);
     if (relevant.length === 0) return { score: 0, spritesMatched: 0, spriteCount: 0 };
-    let total = 0, matched = 0;
+    let total = 0,
+      matched = 0;
     for (const ref of relevant) {
       let best = 0;
       for (const cur of currentFP) {
@@ -173,12 +187,13 @@ export default async function ({ addon, msg, console }) {
   let activeTabIndex = 0;
   let panel = null;
   let tabBar = null;
-  let textContent = null;   // <pre> for Current tab
-  let currentHeader = null;  // header bar above current pseudocode
-  let currentWrap = null;    // column wrapper: currentHeader + textContent
+  let textContent = null; // <pre> for Current tab
+  let currentHeader = null; // header bar above current pseudocode
+  let currentWrap = null; // column wrapper: currentHeader + textContent
   let compareContent = null; // <div> for Compare tab
-  let issuesContent = null;  // <div> for Issues tabs
+  let issuesContent = null; // <div> for Issues tabs
   let overlayCopyBtn = null;
+  let overlayInjectBtn = null;
   let currentFingerprint = null;
   let currentMatchSort = "relevance";
 
@@ -196,49 +211,141 @@ export default async function ({ addon, msg, console }) {
       className: "sa-inspector-close-btn",
       textContent: "✕",
     });
-    closeBtn.addEventListener("click", () => { panel.remove(); panel = null; });
+    closeBtn.addEventListener("click", () => {
+      panel.remove();
+      panel = null;
+    });
     actions.appendChild(closeBtn);
     toolbar.append(tabBar, actions);
+
+    // Drag the panel by the toolbar
+    toolbar.addEventListener("mousedown", (e) => {
+      if (e.target.closest("button")) return;
+      e.preventDefault();
+      const rect = panel.getBoundingClientRect();
+      // Switch from right-anchored to left-anchored so dragging works consistently
+      panel.style.right = "";
+      panel.style.left = rect.left + "px";
+      panel.style.top = rect.top + "px";
+      const ox = e.clientX - rect.left;
+      const oy = e.clientY - rect.top;
+      const onMove = (me) => {
+        panel.style.left = Math.max(0, Math.min(me.clientX - ox, window.innerWidth - 60)) + "px";
+        panel.style.top = Math.max(0, Math.min(me.clientY - oy, window.innerHeight - 40)) + "px";
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
 
     // Body: three content areas, one visible at a time
     const body = Object.assign(document.createElement("div"), { className: "sa-inspector-body" });
 
     textContent = Object.assign(document.createElement("pre"), { className: "sa-inspector-content" });
 
-    // Header bar for Current tab: bug description input
+    // Header bar for Current tab: free-form question / request input
     currentHeader = Object.assign(document.createElement("div"), { className: "sa-inspector-compare-ref-header" });
     const bugInput = Object.assign(document.createElement("input"), {
       type: "text",
       className: "sa-inspector-bug-input",
-      placeholder: "Describe the bug to investigate…",
+      placeholder: "Ask anything about this project… (e.g. why can't I…  /  write a script to…)",
     });
     const bugBtn = Object.assign(document.createElement("button"), {
       className: "sa-inspector-action-btn",
-      textContent: "🔍 Ask ChatGPT",
+      textContent: hasApiToken() ? "🔍 Ask AI" : "🔍 Ask ChatGPT",
     });
     const triggerBugPrompt = () => {
       const desc = bugInput.value.trim();
       if (!desc) return;
+      let promptText;
       try {
         const project = getCurrentProjectFromVM();
-        void navigator.clipboard.writeText(buildBugPrompt(projectToPseudocode(project), desc));
+        promptText = buildAskPrompt(projectToPseudocode(project), desc);
       } catch (e) {
         alert(msg("fetch-error", { error: String(e) }));
         return;
       }
-      tabs.push({ type: "issues", label: "🐛 Bug", issueState: "paste", content: "", cards: [] });
+      const newTab = { type: "issues", label: "💬 Ask", issueState: "paste", content: "", cards: [] };
+      tabs.push(newTab);
       switchTab(tabs.length - 1);
       renderTabs();
       bugInput.value = "";
+      if (hasApiToken()) {
+        void streamToIssuesTab(promptText, newTab);
+      } else {
+        void navigator.clipboard.writeText(promptText);
+      }
     };
     bugBtn.addEventListener("click", triggerBugPrompt);
-    bugInput.addEventListener("keydown", (e) => { if (e.key === "Enter") triggerBugPrompt(); });
-    currentHeader.append(bugInput, bugBtn);
+    bugInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") triggerBugPrompt();
+    });
 
-    compareContent = Object.assign(document.createElement("div"), { className: "sa-inspector-content sa-inspector-matches" });
+    // Parse test button — runs the pseudocode parser and shows the AST in an Issues tab
+    const parseTestBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn",
+      title: "Parse pseudocode → AST (developer tool)",
+      textContent: "🧪 Parse",
+    });
+    parseTestBtn.addEventListener("click", () => {
+      const pseudo = tabs.find((t) => t.type === "current")?.content ?? "";
+      if (!pseudo) {
+        alert("No pseudocode loaded — open a project first.");
+        return;
+      }
+      const { scripts, warnings } = parsePseudocode(pseudo);
+      const summary = [
+        `## Parse result`,
+        ``,
+        `**${scripts.length} scripts** parsed, **${warnings.length} warnings**`,
+        ``,
+        warnings.length > 0
+          ? `### Warnings\n${warnings
+              .map((w) => `- Line ${w.lineNo}: ${w.message}${w.raw ? ` — \`${w.raw}\`` : ""}`)
+              .join("\n")}`
+          : "",
+        ``,
+        `### Scripts`,
+        ...scripts.map((s, i) =>
+          [
+            `#### Script ${i + 1} — ${s.spriteName ?? "?"} | ${s.hat?.raw ?? "(no hat)"}`,
+            "```",
+            JSON.stringify({ hat: s.hat, body: s.body }, null, 2),
+            "```",
+          ].join("\n")
+        ),
+      ]
+        .filter((l) => l !== "")
+        .join("\n");
+
+      const newTab = {
+        type: "issues",
+        label: "🧪 AST",
+        issueState: "cards",
+        content: summary,
+        cards: [],
+        _parseSrc: pseudo,
+        _parseWarnings: warnings,
+        _parseScripts: scripts,
+      };
+      tabs.push(newTab);
+      switchTab(tabs.length - 1);
+      renderTabs();
+    });
+
+    currentHeader.append(bugInput, bugBtn, parseTestBtn);
+
+    compareContent = Object.assign(document.createElement("div"), {
+      className: "sa-inspector-content sa-inspector-matches",
+    });
     compareContent.style.display = "none";
 
-    issuesContent = Object.assign(document.createElement("div"), { className: "sa-inspector-content sa-inspector-issues" });
+    issuesContent = Object.assign(document.createElement("div"), {
+      className: "sa-inspector-content sa-inspector-issues",
+    });
     issuesContent.style.display = "none";
 
     overlayCopyBtn = Object.assign(document.createElement("button"), {
@@ -253,12 +360,58 @@ export default async function ({ addon, msg, console }) {
       setTimeout(() => (overlayCopyBtn.textContent = "📋"), 1500);
     });
 
+    overlayInjectBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-overlay-inject",
+      title: "Inject all scripts into editor",
+      textContent: "💉",
+    });
+    overlayInjectBtn.style.display = "none";
+    overlayInjectBtn.addEventListener("click", () => {
+      const tab = tabs[activeTabIndex];
+      const scripts = tab?._parseScripts;
+      if (!scripts?.length) return;
+      overlayInjectBtn.disabled = true;
+      overlayInjectBtn.textContent = "⏳";
+      const lines = [];
+      let pending = scripts.length;
+      let anyFailed = false;
+      for (const script of scripts) {
+        doInjectScript(
+          script,
+          (msg) => {
+            lines.push(msg);
+            console.log("[inspector:inject-all]", msg);
+          },
+          (ok) => {
+            if (!ok) anyFailed = true;
+            pending--;
+            if (pending === 0) {
+              overlayInjectBtn.disabled = false;
+              overlayInjectBtn.textContent = anyFailed ? "❌" : "✅";
+              setTimeout(() => {
+                overlayInjectBtn.textContent = "💉";
+              }, 3000);
+              if (anyFailed) {
+                // Show the log in a quick overlay so the user can see what went wrong
+                const errLog = lines
+                  .filter(
+                    (l) => l.includes("❌") || l.includes("⚠️") || l.includes("MISSING") || l.includes("EXCEPTION")
+                  )
+                  .join("\n");
+                if (errLog) alert(`Inject failed:\n\n${errLog}`);
+              }
+            }
+          }
+        );
+      }
+    });
+
     // Wrap currentHeader + textContent in a column so header sits above code
     currentWrap = Object.assign(document.createElement("div"), { className: "sa-inspector-current-wrap" });
     currentWrap.style.display = "none";
     currentWrap.append(currentHeader, textContent);
 
-    body.append(currentWrap, compareContent, issuesContent, overlayCopyBtn);
+    body.append(currentWrap, compareContent, issuesContent, overlayCopyBtn, overlayInjectBtn);
     panel.append(toolbar, body);
     document.body.appendChild(panel);
   }
@@ -273,6 +426,7 @@ export default async function ({ addon, msg, console }) {
     compareContent.style.display = isCompare ? "" : "none";
     issuesContent.style.display = isIssues ? "" : "none";
     overlayCopyBtn.style.display = isCurrent ? "" : "none";
+    overlayInjectBtn.style.display = isIssues && tab._parseScripts?.length > 0 ? "" : "none";
     if (isCurrent) textContent.textContent = tab.content ?? "";
     if (isCompare) void renderCompareTab(tab);
     if (isIssues) renderIssuesContent(tab);
@@ -297,7 +451,10 @@ export default async function ({ addon, msg, console }) {
       textContent: "Sort: ",
     });
     const sortSelect = Object.assign(document.createElement("select"), { className: "sa-inspector-matches-sort" });
-    for (const [val, lbl] of [["relevance", "By relevance"], ["tutorial", "By tutorial"]]) {
+    for (const [val, lbl] of [
+      ["relevance", "By relevance"],
+      ["tutorial", "By tutorial"],
+    ]) {
       const opt = Object.assign(document.createElement("option"), { value: val, textContent: lbl });
       if (val === currentMatchSort) opt.selected = true;
       sortSelect.appendChild(opt);
@@ -317,18 +474,21 @@ export default async function ({ addon, msg, console }) {
     // Library match rows
     const episodes = await dbGetAll();
     if (episodes.length === 0) {
-      compareContent.appendChild(Object.assign(document.createElement("p"), {
-        className: "sa-inspector-matches-empty",
-        textContent: "No episodes saved yet. Load a reference .sb3 below and click 💾 Save episode to add it.",
-      }));
+      compareContent.appendChild(
+        Object.assign(document.createElement("p"), {
+          className: "sa-inspector-matches-empty",
+          textContent: "No episodes saved yet. Load a reference .sb3 below and click 💾 Save episode to add it.",
+        })
+      );
     } else {
       const results = episodes.map((ep) => ({
         episode: ep,
         ...scoreAgainst(currentFingerprint ?? [], ep.fingerprint ?? []),
       }));
-      const sorted = [...results].sort(currentMatchSort === "relevance"
-        ? (a, b) => b.score - a.score
-        : (a, b) => (a.episode.tutorial + a.episode.label).localeCompare(b.episode.tutorial + b.episode.label)
+      const sorted = [...results].sort(
+        currentMatchSort === "relevance"
+          ? (a, b) => b.score - a.score
+          : (a, b) => (a.episode.tutorial + a.episode.label).localeCompare(b.episode.tutorial + b.episode.label)
       );
       for (const result of sorted) {
         compareContent.appendChild(buildMatchRow(result.episode, currentFingerprint ? result : null));
@@ -338,7 +498,9 @@ export default async function ({ addon, msg, console }) {
     // Load / Fetch section
     const divider = Object.assign(document.createElement("div"), { className: "sa-inspector-compare-divider" });
     compareContent.appendChild(divider);
-    const loadSection = Object.assign(document.createElement("div"), { className: "sa-inspector-compare-load-section" });
+    const loadSection = Object.assign(document.createElement("div"), {
+      className: "sa-inspector-compare-load-section",
+    });
     const loadBtn = Object.assign(document.createElement("button"), {
       className: "sa-inspector-action-btn sa-inspector-compare-load-btn",
       textContent: "📂 Load .sb3 file",
@@ -361,7 +523,7 @@ export default async function ({ addon, msg, console }) {
     });
     const analyzeBtn = Object.assign(document.createElement("button"), {
       className: "sa-inspector-action-btn",
-      textContent: "📊 Copy & open issues tab",
+      textContent: hasApiToken() ? "📊 Analyse with AI" : "📊 Copy & open issues tab",
     });
     analyzeBtn.addEventListener("click", () => handleCopyAndAnalyze(tab));
     header.append(labelEl, analyzeBtn);
@@ -400,44 +562,56 @@ export default async function ({ addon, msg, console }) {
   }
 
   function handleCopyAndAnalyze(tab) {
+    let promptText;
     try {
       const studentProject = getCurrentProjectFromVM();
       const studentCode = projectToPseudocode(studentProject);
-      const prompt = buildComparisonPrompt(studentCode, tab.referenceContent, tab.referenceLabel);
-      void navigator.clipboard.writeText(prompt);
+      promptText = buildComparisonPrompt(studentCode, tab.referenceContent, tab.referenceLabel);
     } catch (e) {
       alert(msg("fetch-error", { error: String(e) }));
       return;
     }
-    // Open a fresh Issues tab ready to paste the ChatGPT response into
-    tabs.push({ type: "issues", label: "⚠️ Issues", issueState: "paste", content: "", cards: [] });
+    const newTab = { type: "issues", label: "⚠️ Issues", issueState: "paste", content: "", cards: [] };
+    tabs.push(newTab);
     switchTab(tabs.length - 1);
     renderTabs();
+    if (hasApiToken()) {
+      void streamToIssuesTab(promptText, newTab);
+    } else {
+      void navigator.clipboard.writeText(promptText);
+    }
   }
 
   function buildMatchRow(ep, result) {
     const row = Object.assign(document.createElement("div"), { className: "sa-inspector-match-row" });
     const info = Object.assign(document.createElement("div"), { className: "sa-inspector-match-info" });
-    info.appendChild(Object.assign(document.createElement("div"), {
-      className: "sa-inspector-match-title",
-      textContent: `${ep.tutorial} — ${ep.label}`,
-    }));
+    info.appendChild(
+      Object.assign(document.createElement("div"), {
+        className: "sa-inspector-match-title",
+        textContent: `${ep.tutorial} — ${ep.label}`,
+      })
+    );
     if (result) {
       const pct = Math.round(result.score * 100);
-      info.appendChild(Object.assign(document.createElement("div"), {
-        className: "sa-inspector-match-subtitle",
-        textContent: `${result.spritesMatched}/${result.spriteCount} sprites matched`,
-      }));
+      info.appendChild(
+        Object.assign(document.createElement("div"), {
+          className: "sa-inspector-match-subtitle",
+          textContent: `${result.spritesMatched}/${result.spriteCount} sprites matched`,
+        })
+      );
       const barWrap = Object.assign(document.createElement("div"), { className: "sa-inspector-match-bar-wrap" });
       const barTrack = Object.assign(document.createElement("div"), { className: "sa-inspector-match-bar-track" });
       const bar = Object.assign(document.createElement("div"), { className: "sa-inspector-match-bar" });
       bar.style.width = `${Math.round(pct * 1.2)}px`; // 120px track × pct/100
       bar.style.background = pct > 60 ? "#a6e3a1" : pct > 30 ? "#f9e2af" : "#f38ba8";
       barTrack.appendChild(bar);
-      barWrap.append(barTrack, Object.assign(document.createElement("span"), {
-        className: "sa-inspector-match-pct",
-        textContent: `${pct}%`,
-      }));
+      barWrap.append(
+        barTrack,
+        Object.assign(document.createElement("span"), {
+          className: "sa-inspector-match-pct",
+          textContent: `${pct}%`,
+        })
+      );
       info.appendChild(barWrap);
     }
     const btns = Object.assign(document.createElement("div"), { className: "sa-inspector-match-btns" });
@@ -494,82 +668,630 @@ export default async function ({ addon, msg, console }) {
     fileInput.click();
   }
 
+  // ─── Core inject logic ────────────────────────────────────────────────────
+  // Injects a single parsed script into the current editing target.
+  // appendLog(msg) receives diagnostic lines; onDone(ok) is called when finished.
+  function doInjectScript(script, appendLog, onDone) {
+    const vm = addon.tab.traps.vm;
+    appendLog(`vm: ${vm ? "ok" : "MISSING"}`);
+    if (!vm) {
+      onDone(false);
+      return;
+    }
+    appendLog(
+      `editingTarget: ${vm.editingTarget ? `"${vm.editingTarget.name}" id=${vm.editingTarget.id}` : "MISSING"}`
+    );
+    if (!vm.editingTarget) {
+      onDone(false);
+      return;
+    }
+
+    const targetId = vm.editingTarget.id;
+    const gui = addon.tab.redux.state?.scratchGui;
+    appendLog(`redux.scratchGui: ${gui ? "ok" : "MISSING"}`);
+    const reduxMetrics = gui?.workspaceMetrics?.targets?.[targetId];
+    appendLog(
+      `workspaceMetrics for target: ${reduxMetrics ? JSON.stringify(reduxMetrics) : "NOT FOUND — falling back to 0,0,1"}`
+    );
+    const scale = reduxMetrics?.scale ?? 1;
+    const scrollX = reduxMetrics?.scrollX ?? 0;
+    const scrollY = reduxMetrics?.scrollY ?? 0;
+    const posX = (-scrollX + 30) / scale;
+    const posY = (-scrollY + 30) / scale;
+    appendLog(`placing at pos=(${posX.toFixed(1)}, ${posY.toFixed(1)})`);
+
+    try {
+      delete vm._unresolvedVars;
+      const blocks = astToBlocks([script], vm, posX, posY);
+      appendLog(`\nastToBlocks produced ${blocks.length} block(s):`);
+
+      const stageTarget = vm.runtime?.getTargetForStage?.();
+      const mkId = () => {
+        let id = "";
+        const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#%()*+,-./:;=?@[]^_`{|}~";
+        for (let k = 0; k < 20; k++) id += chars[Math.floor(Math.random() * chars.length)];
+        return id;
+      };
+      const createdVarIds = new Map();
+      const createdListIds = new Map();
+      const createdVars = [],
+        createdLists = [];
+      for (const block of blocks) {
+        for (const [fieldName, field] of Object.entries(block.fields ?? {})) {
+          if (field.id) continue;
+          const name = field.value;
+          if (fieldName === "VARIABLE") {
+            if (!createdVarIds.has(name)) {
+              const newId = mkId();
+              vm.editingTarget.createVariable(newId, name, "");
+              createdVarIds.set(name, newId);
+              createdVars.push(name);
+            }
+            field.id = createdVarIds.get(name);
+          } else if (fieldName === "LIST") {
+            if (!createdListIds.has(name)) {
+              const target = stageTarget ?? vm.editingTarget;
+              const newId = mkId();
+              target.createVariable(newId, name, "list");
+              createdListIds.set(name, newId);
+              createdLists.push(name);
+            }
+            field.id = createdListIds.get(name);
+          }
+        }
+      }
+      if (createdVars.length > 0) appendLog(`✅ Created variables: ${createdVars.map((n) => `"${n}"`).join(", ")}`);
+      if (createdLists.length > 0) appendLog(`✅ Created lists: ${createdLists.map((n) => `"${n}"`).join(", ")}`);
+
+      const missingIds = [];
+      for (const block of blocks) {
+        for (const [fieldName, field] of Object.entries(block.fields ?? {})) {
+          if ((fieldName === "VARIABLE" || fieldName === "LIST") && !field.id) {
+            missingIds.push(`${block.opcode}.${fieldName}="${field.value}"`);
+          }
+        }
+      }
+      if (missingIds.length > 0) appendLog(`⚠️ Fields still missing id after auto-create: ${missingIds.join(", ")}`);
+      for (const b of blocks) {
+        appendLog(`  [${b.id}] opcode=${b.opcode} topLevel=${b.topLevel} shadow=${b.shadow}`);
+        appendLog(`    next=${b.next ?? "null"}  parent=${b.parent ?? "null"}`);
+        appendLog(`    x=${b.x}  y=${b.y}`);
+        if (Object.keys(b.fields).length > 0) appendLog(`    fields=${JSON.stringify(b.fields)}`);
+        if (Object.keys(b.inputs).length > 0) appendLog(`    inputs=${JSON.stringify(b.inputs)}`);
+        if (b.mutation) appendLog(`    mutation=${JSON.stringify(b.mutation)}`);
+      }
+
+      appendLog(`\ncalling vm.shareBlocksToTarget(${blocks.length} blocks, "${targetId}")`);
+      const result = vm.shareBlocksToTarget(blocks, targetId);
+      appendLog(`shareBlocksToTarget returned: ${result} (type: ${typeof result})`);
+      const afterInject = () => {
+        const allBlocks = vm.editingTarget.blocks._blocks ?? {};
+        const allBlockIds = Object.keys(allBlocks);
+        appendLog(`target now has ${allBlockIds.length} total blocks`);
+        const topBlocks = Object.entries(allBlocks)
+          .filter(([, b]) => b.topLevel)
+          .map(([id, b]) => `${id.slice(0, 8)} ${b.opcode} (${b.x?.toFixed(0)},${b.y?.toFixed(0)})`);
+        appendLog(`top-level: ${topBlocks.join(", ") || "(none)"}`);
+        try {
+          const xmlStr = vm.editingTarget.blocks.toXML(vm.editingTarget.comments);
+          appendLog(`\nXML (first 2000 chars):\n${xmlStr.slice(0, 2000)}`);
+        } catch (xmlErr) {
+          appendLog(`❌ toXML() threw: ${xmlErr.message}\n${xmlErr.stack ?? ""}`);
+        }
+        if (typeof vm.refreshWorkspace === "function") {
+          try {
+            vm.refreshWorkspace();
+            appendLog("✅ vm.refreshWorkspace() called.");
+          } catch (refreshErr) {
+            appendLog(`❌ refreshWorkspace threw: ${refreshErr.message}\n${refreshErr.stack ?? ""}`);
+          }
+        } else {
+          // refreshWorkspace() isn't available in this VM version, but it just calls
+          // vm.emit('workspaceUpdate', {xml}) — do the same thing manually.
+          try {
+            const xml = vm.editingTarget.blocks.toXML(vm.editingTarget.comments);
+            vm.emit("workspaceUpdate", { xml });
+            appendLog("✅ emitted workspaceUpdate (refreshWorkspace fallback).");
+          } catch (emitErr) {
+            appendLog(`⚠️ fallback workspaceUpdate failed: ${emitErr.message}`);
+          }
+        }
+        onDone(true);
+      };
+      if (result && typeof result.then === "function") {
+        result.then(afterInject).catch((e) => {
+          appendLog(`❌ Promise rejected: ${e.message}`);
+          onDone(false);
+        });
+      } else {
+        afterInject();
+      }
+    } catch (e) {
+      appendLog(`\n❌ EXCEPTION: ${e.message}`);
+      appendLog(e.stack ?? "");
+      console.error("[inspector:inject]", e);
+      onDone(false);
+    }
+  }
+
   // ─── Issues tab rendering ─────────────────────────────────────────────────
 
   function renderIssuesContent(tab) {
     issuesContent.innerHTML = "";
-    if (tab.issueState === "paste") {
-      issuesContent.appendChild(Object.assign(document.createElement("p"), {
-        className: "sa-inspector-matches-empty",
-        textContent: "Paste the ChatGPT response below:",
-      }));
+    if (tab.issueState === "streaming") {
+      const header = Object.assign(document.createElement("div"), {
+        className: "sa-inspector-compare-ref-header",
+        innerHTML: `<span class="sa-inspector-compare-ref-label sa-inspector-stream-waiting">⏳ Waiting for response…</span>`,
+      });
+      const mdContainer = Object.assign(document.createElement("div"), {
+        className: "sa-inspector-stream-md",
+      });
+      if (tab.streamText) renderStreamingMarkdown(tab.streamText, mdContainer);
+      tab._streamContainer = mdContainer;
+      tab._streamHeader = header.querySelector(".sa-inspector-stream-waiting");
+      issuesContent.append(header, mdContainer);
+    } else if (tab.issueState === "paste") {
+      issuesContent.appendChild(
+        Object.assign(document.createElement("p"), {
+          className: "sa-inspector-matches-empty",
+          textContent: "Paste the AI / ChatGPT response below:",
+        })
+      );
       const pasteArea = Object.assign(document.createElement("textarea"), {
         className: "sa-inspector-paste-area",
-        placeholder: "Paste ChatGPT response here…",
+        placeholder: "Paste response here…",
         rows: 12,
       });
       const parseBtn = Object.assign(document.createElement("button"), {
         className: "sa-inspector-action-btn sa-inspector-parse-btn",
-        textContent: "Parse report",
+        textContent: "Render report",
       });
-      const doParseAndRender = () => {
+      const doRender = () => {
         const text = pasteArea.value.trim();
         if (!text) return;
-        const cards = parseReport(text);
-        if (cards.length === 0) { alert("No citation blocks found."); return; }
         tab.issueState = "cards";
         tab.content = text;
-        tab.cards = cards;
         renderIssuesContent(tab);
       };
-      parseBtn.addEventListener("click", doParseAndRender);
-      pasteArea.addEventListener("paste", () => setTimeout(doParseAndRender, 0));
+      parseBtn.addEventListener("click", doRender);
+      pasteArea.addEventListener("paste", () => setTimeout(doRender, 0));
       issuesContent.append(pasteArea, parseBtn);
-    } else {
-      for (const card of tab.cards ?? []) {
-        if (card.type === "section") {
-          issuesContent.appendChild(Object.assign(document.createElement("h3"), {
-            className: "sa-inspector-issue-section",
-            textContent: card.text,
-          }));
-        } else {
-          const el = document.createElement("div");
-          el.className = "sa-inspector-issue-card";
-          const cardHeader = Object.assign(document.createElement("div"), { className: "sa-inspector-issue-card-header" });
-          cardHeader.append(
-            Object.assign(document.createElement("span"), { className: "sa-inspector-issue-card-title", textContent: card.title }),
-            Object.assign(Object.assign(document.createElement("button"), { className: "sa-inspector-issue-go-btn", textContent: "🎯 Go" }),
-              { onclick: () => void handleGotoBlock(card.raw, el) })
+    } else if (tab._parseScripts != null) {
+      // ── AST tab: per-script cards with sub-tabs ──────────────────────────
+      const scripts = tab._parseScripts;
+      const warnings = tab._parseWarnings ?? [];
+
+      if (warnings.length > 0) {
+        const warnEl = Object.assign(document.createElement("div"), { className: "sa-inspector-ast-warnings" });
+        warnEl.innerHTML =
+          `<strong>⚠️ ${warnings.length} warning${warnings.length !== 1 ? "s" : ""}</strong>: ` +
+          warnings
+            .map((w) => `Line ${w.lineNo}: ${w.message}${w.raw ? ` — <code>${escHtml(w.raw)}</code>` : ""}`)
+            .join(" · ");
+        issuesContent.appendChild(warnEl);
+      }
+      if (scripts.length === 0) {
+        issuesContent.appendChild(
+          Object.assign(document.createElement("p"), {
+            className: "sa-inspector-matches-empty",
+            textContent: "No scripts parsed.",
+          })
+        );
+      }
+
+      for (let si = 0; si < scripts.length; si++) {
+        const script = scripts[si];
+        const card = Object.assign(document.createElement("div"), { className: "sa-inspector-ast-script-card" });
+        const cardHeader = Object.assign(document.createElement("div"), {
+          className: "sa-inspector-ast-script-header",
+          textContent: `Script ${si + 1} — ${script.spriteName ?? "?"} | ${script.hat?.raw ?? "(no hat)"}`,
+        });
+        card.appendChild(cardHeader);
+
+        const subTabBar = Object.assign(document.createElement("div"), { className: "sa-inspector-ast-subtabs" });
+        const subPanes = {};
+        const switchSubTab = (name) => {
+          for (const [n, { btn, pane }] of Object.entries(subPanes)) {
+            btn.classList.toggle("sa-inspector-ast-subtab-active", n === name);
+            pane.style.display = n === name ? "" : "none";
+          }
+        };
+        const addSubTab = (name, label, buildFn) => {
+          const btn = Object.assign(document.createElement("button"), {
+            className: "sa-inspector-ast-subtab",
+            textContent: label,
+          });
+          const pane = Object.assign(document.createElement("div"), {
+            className: "sa-inspector-ast-pane",
+            style: "display:none",
+          });
+          buildFn(pane);
+          btn.addEventListener("click", () => switchSubTab(name));
+          subTabBar.appendChild(btn);
+          subPanes[name] = { btn, pane };
+          card.appendChild(pane);
+        };
+
+        addSubTab("pseudo", "📝 Pseudocode", (pane) => {
+          pane.appendChild(
+            Object.assign(document.createElement("pre"), {
+              className: "sa-inspector-ast-pre",
+              textContent: tab._parseSrc ?? "(no source)",
+            })
           );
-          el.append(cardHeader, Object.assign(document.createElement("pre"), {
-            className: "sa-inspector-issue-evidence",
-            textContent: card.evidence,
-          }));
-          issuesContent.appendChild(el);
-        }
+        });
+        addSubTab("ast", "🌳 AST", (pane) => {
+          pane.appendChild(
+            Object.assign(document.createElement("pre"), {
+              className: "sa-inspector-ast-pre",
+              textContent: JSON.stringify({ hat: script.hat, body: script.body }, null, 2),
+            })
+          );
+        });
+        addSubTab("inject", "💉 Inject", (pane) => {
+          const info = Object.assign(document.createElement("p"), {
+            className: "sa-inspector-ast-inject-info",
+            textContent: `Injects Script ${si + 1} into the current sprite's workspace.`,
+          });
+          const log = Object.assign(document.createElement("pre"), {
+            className: "sa-inspector-ast-pre sa-inspector-ast-inject-log",
+            textContent: "",
+          });
+          const appendLog = (msg) => {
+            log.textContent += msg + "\n";
+          };
+          const injectBtn = Object.assign(document.createElement("button"), {
+            className: "sa-inspector-action-btn",
+            textContent: "💉 Inject this script",
+          });
+          injectBtn.addEventListener("click", () => {
+            log.textContent = "";
+            injectBtn.disabled = true;
+            doInjectScript(
+              script,
+              (msg) => {
+                log.textContent += msg + "\n";
+              },
+              (ok) => {
+                injectBtn.disabled = false;
+                injectBtn.textContent = ok ? "✅ Done" : "❌ Failed";
+                setTimeout(() => {
+                  injectBtn.textContent = "💉 Inject this script";
+                }, 3000);
+              }
+            );
+          });
+          pane.append(info, injectBtn, log);
+        });
+
+        card.insertBefore(subTabBar, card.children[1]);
+        switchSubTab("pseudo");
+        issuesContent.appendChild(card);
+      }
+
+      const copyDebugBtn = Object.assign(document.createElement("button"), {
+        className: "sa-inspector-action-btn",
+        textContent: "📋 Copy debug report",
+      });
+      copyDebugBtn.addEventListener("click", () => {
+        const report = [
+          "=== PARSE INPUT ===",
+          tab._parseSrc ?? "",
+          "",
+          "=== WARNINGS ===",
+          warnings.length > 0
+            ? warnings.map((w) => `Line ${w.lineNo}: ${w.message}${w.raw ? ` — ${w.raw}` : ""}`).join("\n")
+            : "(none)",
+          "",
+          "=== AST ===",
+          JSON.stringify(scripts, null, 2),
+        ].join("\n");
+        void navigator.clipboard.writeText(report).then(() => {
+          copyDebugBtn.textContent = "✅ Copied!";
+          setTimeout(() => {
+            copyDebugBtn.textContent = "📋 Copy debug report";
+          }, 2000);
+        });
+      });
+      issuesContent.appendChild(copyDebugBtn);
+    } else {
+      renderMarkdownToDOM(tab.content ?? "", issuesContent);
+      if (tab._usageSummary) {
+        issuesContent.appendChild(
+          Object.assign(document.createElement("div"), {
+            className: "sa-inspector-usage-summary",
+            textContent: `🪙 ${tab._usageSummary}`,
+          })
+        );
       }
     }
   }
 
-  // Parse a full ChatGPT report into section headers + citation cards.
-  function parseReport(text) {
-    const cards = [];
-    const segments = text.split(/```[\w]*\n?/);
-    for (let i = 0; i < segments.length; i++) {
-      if (i % 2 === 0) {
-        for (const line of segments[i].split("\n")) {
-          const m = line.match(/^#+\s*(.+)/) ?? line.match(/^\d+\.\s+(.+)/);
-          if (m) cards.push({ type: "section", text: m[1].trim() });
+  // ─── Markdown renderer ────────────────────────────────────────────────────
+
+  // Escape HTML special chars so they display literally.
+  function escHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  // Convert inline markdown to HTML string (bold, italic, inline code).
+  function inlineMd(text) {
+    let s = escHtml(text);
+    s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\*(.+?)\*/g, "<em>$1</em>");
+    s = s.replace(/`([^`]+)`/g, '<code class="sa-inspector-md-code">$1</code>');
+    return s;
+  }
+
+  // Render a plain-text segment (between code fences) into the container.
+  function renderTextSegment(text, container) {
+    let listEl = null;
+    let listType = null;
+    let paraLines = [];
+
+    const flushPara = () => {
+      const joined = paraLines.join(" ").trim();
+      paraLines = [];
+      if (!joined) return;
+      const p = Object.assign(document.createElement("p"), { className: "sa-inspector-md-p" });
+      p.innerHTML = inlineMd(joined);
+      container.appendChild(p);
+    };
+
+    const flushList = () => {
+      listEl = null;
+      listType = null;
+    };
+
+    for (const line of text.split("\n")) {
+      const hMatch = line.match(/^(#{1,5})\s+(.+)/);
+      if (hMatch) {
+        flushPara();
+        flushList();
+        // Strip bold/italic markers and check for a citation reference [→ id]
+        const rawText = hMatch[2].replace(/\*\*/g, "").replace(/\*/g, "").trim();
+        if (rawText.includes("\u2192")) {
+          // Render as an interactive citation card rather than a plain heading
+          renderCitationBlock(rawText, container);
+          continue;
+        }
+        const level = Math.min(hMatch[1].length + 1, 5); // h2–h5 to not clash with page headings
+        const el = document.createElement(`h${level}`);
+        el.className = "sa-inspector-md-h";
+        el.innerHTML = inlineMd(hMatch[2]);
+        container.appendChild(el);
+        continue;
+      }
+
+      const bulletMatch = line.match(/^[-*]\s+(.+)/);
+      if (bulletMatch) {
+        flushPara();
+        if (listType !== "ul") {
+          flushList();
+          listEl = Object.assign(document.createElement("ul"), { className: "sa-inspector-md-list" });
+          container.appendChild(listEl);
+          listType = "ul";
+        }
+        const li = document.createElement("li");
+        li.innerHTML = inlineMd(bulletMatch[1]);
+        listEl.appendChild(li);
+        continue;
+      }
+
+      const numMatch = line.match(/^\d+\.\s+(.+)/);
+      if (numMatch) {
+        flushPara();
+        if (listType !== "ol") {
+          flushList();
+          listEl = Object.assign(document.createElement("ol"), { className: "sa-inspector-md-list" });
+          container.appendChild(listEl);
+          listType = "ol";
+        }
+        const li = document.createElement("li");
+        li.innerHTML = inlineMd(numMatch[1]);
+        listEl.appendChild(li);
+        continue;
+      }
+
+      if (line.trim() === "") {
+        flushList();
+        flushPara();
+        continue;
+      }
+
+      // Indented continuation of a list item — append to last <li>
+      if (listEl && line.match(/^\s{2,}/)) {
+        const lastLi = listEl.lastElementChild;
+        if (lastLi) {
+          lastLi.innerHTML += " " + inlineMd(line.trim());
+        }
+        continue;
+      }
+
+      flushList();
+      paraLines.push(line.trim());
+    }
+    flushPara();
+  }
+
+  // Build a Parse button that runs parsePseudocode on `codeText` and opens an AST tab.
+  function makeParsePseudocodeBtn(codeText, className) {
+    const btn = Object.assign(document.createElement("button"), {
+      className,
+      title: "Parse pseudocode → AST",
+      textContent: "🧪 Parse",
+    });
+    btn.addEventListener("click", () => {
+      // Strip trailing ``` fence before parsing (matches what parseTestBtn does)
+      const src = codeText.replace(/\n?```\s*$/, "");
+      const { scripts, warnings } = parsePseudocode(src);
+      const newTab = {
+        type: "issues",
+        label: "🧪 AST",
+        issueState: "cards",
+        content: "",
+        cards: [],
+        _parseSrc: src,
+        _parseWarnings: warnings,
+        _parseScripts: scripts,
+      };
+      tabs.push(newTab);
+      switchTab(tabs.length - 1);
+      renderTabs();
+    });
+    return btn;
+  }
+
+  // Render a citation code block (first line contains [→ id]) as an interactive card.
+  function renderCitationBlock(raw, container) {
+    const lines = raw.split("\n");
+    const firstLine = lines[0] ?? "";
+    // Strip the citation reference [→ id] from the title, anchoring to the
+    // last ] so IDs containing ] characters (e.g. W61dB;kZ0L6[ZX5O]dCf) work.
+    const title =
+      firstLine.replace(/\s*\|\s*\[\u2192.*\]\s*$/, "").trim() ||
+      firstLine
+        .replace(/\[\u2192.*\]/g, "")
+        .replace(/\s*\|\s*$/, "")
+        .trim();
+    const evidence = lines.slice(1).join("\n").trim();
+
+    const el = document.createElement("div");
+    el.className = "sa-inspector-issue-card";
+
+    const cardHeader = Object.assign(document.createElement("div"), { className: "sa-inspector-issue-card-header" });
+    const titleEl = Object.assign(document.createElement("span"), {
+      className: "sa-inspector-issue-card-title",
+      textContent: title || firstLine,
+    });
+    const goBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-issue-go-btn",
+      textContent: "🎯 Go",
+    });
+    goBtn.addEventListener("click", () => void handleGotoBlock(raw, el));
+    const parseCardBtn = makeParsePseudocodeBtn(evidence || raw, "sa-inspector-issue-go-btn");
+    cardHeader.append(titleEl, goBtn, parseCardBtn);
+
+    if (evidence) {
+      el.append(
+        cardHeader,
+        Object.assign(document.createElement("pre"), {
+          className: "sa-inspector-issue-evidence",
+          textContent: evidence,
+        })
+      );
+    } else {
+      el.appendChild(cardHeader);
+    }
+    container.appendChild(el);
+  }
+
+  // Live streaming render: render up to the last complete fence boundary as full
+  // markdown, then show any in-progress (unclosed) code fence as a raw growing pre.
+  function renderStreamingMarkdown(text, container) {
+    const fenceRe = /^```/gm;
+    let fenceCount = 0;
+    let lastSafeEnd = 0; // end of last *closed* fence
+    let openFenceStart = 0; // start of the currently *open* fence
+    let m;
+    while ((m = fenceRe.exec(text)) !== null) {
+      fenceCount++;
+      if (fenceCount % 2 === 1) {
+        // Opening fence — note where the safe text ends (just before this fence)
+        openFenceStart = m.index;
+      } else {
+        // Closing fence — advance the last-safe cursor past this fence's line
+        const eol = text.indexOf("\n", m.index);
+        lastSafeEnd = eol === -1 ? text.length : eol + 1;
+      }
+    }
+    // If inside an unclosed fence, safe = everything before it opens; tail = from there on.
+    // This prevents the whole panel going blank when the first ``` arrives mid-stream.
+    const insideFence = fenceCount % 2 === 1;
+    const safePart = insideFence ? text.slice(0, openFenceStart) : text;
+    const tail = insideFence ? text.slice(openFenceStart) : "";
+
+    container.innerHTML = "";
+    if (safePart.trim()) renderMarkdownToDOM(safePart, container);
+    if (tail) {
+      container.appendChild(
+        Object.assign(document.createElement("pre"), {
+          className: "sa-inspector-md-pre sa-inspector-stream-tail",
+          textContent: tail,
+        })
+      );
+    }
+  }
+
+  // Main entry point: render a full markdown string into a container element.
+  function renderMarkdownToDOM(text, container) {
+    container.innerHTML = "";
+    // Split on fenced code blocks (capture the whole block so we can inspect it).
+    const fenceRe = /```([\w]*)\n([\s\S]*?)```/g;
+    let pos = 0;
+    let match;
+    while ((match = fenceRe.exec(text)) !== null) {
+      if (match.index > pos) {
+        renderTextSegment(text.slice(pos, match.index), container);
+      }
+      const blockContent = match[2].replace(/\n$/, "");
+      const firstLine = blockContent.split("\n")[0] ?? "";
+      if (firstLine.includes("\u2192")) {
+        renderCitationBlock(blockContent, container);
+      } else {
+        // Plain code block — wrap so we can add the Parse button alongside
+        const blockWrap = document.createElement("div");
+        blockWrap.className = "sa-inspector-md-pre-wrap";
+        const pre = document.createElement("pre");
+        pre.className = "sa-inspector-md-pre";
+        const code = Object.assign(document.createElement("code"), { textContent: blockContent });
+        pre.appendChild(code);
+        const parseBtn = makeParsePseudocodeBtn(blockContent, "sa-inspector-code-parse-btn");
+        blockWrap.append(pre, parseBtn);
+        container.appendChild(blockWrap);
+      }
+      pos = match.index + match[0].length;
+    }
+    if (pos < text.length) {
+      const remaining = text.slice(pos);
+      // Check for an unclosed fence in the remaining text (AI stream ended before closing ```)
+      const openFenceIdx = remaining.indexOf("```");
+      if (openFenceIdx !== -1) {
+        // Render any markdown before the fence opening
+        if (openFenceIdx > 0) renderTextSegment(remaining.slice(0, openFenceIdx), container);
+        // Parse the unclosed fence: skip the opening ``` line, treat rest as block content
+        const afterFenceLine = remaining.indexOf("\n", openFenceIdx);
+        const blockContent = afterFenceLine !== -1 ? remaining.slice(afterFenceLine + 1) : "";
+        if (blockContent) {
+          const firstLine = blockContent.split("\n")[0] ?? "";
+          if (firstLine.includes("\u2192")) {
+            renderCitationBlock(blockContent, container);
+          } else {
+            const blockWrap = document.createElement("div");
+            blockWrap.className = "sa-inspector-md-pre-wrap";
+            const pre = document.createElement("pre");
+            pre.className = "sa-inspector-md-pre";
+            const code = Object.assign(document.createElement("code"), { textContent: blockContent });
+            pre.appendChild(code);
+            const parseBtn = makeParsePseudocodeBtn(blockContent, "sa-inspector-code-parse-btn");
+            blockWrap.append(pre, parseBtn);
+            container.appendChild(blockWrap);
+          }
         }
       } else {
-        const raw = segments[i].replace(/\n?```$/, "").trim();
-        const lines = raw.split("\n");
-        const firstLine = lines[0] ?? "";
-        if (firstLine.includes("→")) {
-          const title = firstLine.replace(/\[\u2192[^\]]*\]/, "").replace(/\s*\|\s*$/, "").trim();
-          cards.push({ type: "citation", title, evidence: lines.slice(1).join("\n").trim(), raw });
-        }
+        renderTextSegment(remaining, container);
       }
+    }
+  }
+
+  // parseReport is kept for extracting citation block IDs (used by streaming end-detection).
+  function parseReport(text) {
+    const cards = [];
+    const fenceRe = /```[\w]*\n([\s\S]*?)```/g;
+    let match;
+    while ((match = fenceRe.exec(text)) !== null) {
+      const raw = match[1].replace(/\n$/, "");
+      if (raw.split("\n")[0]?.includes("\u2192")) cards.push(raw);
     }
     return cards;
   }
@@ -592,7 +1314,11 @@ export default async function ({ addon, msg, console }) {
         });
         closeX.addEventListener("click", (e) => {
           e.stopPropagation();
-          if (tabs[i].type === "compare") { revertCompareToChooser(); } else { removeTab(i); }
+          if (tabs[i].type === "compare") {
+            revertCompareToChooser();
+          } else {
+            removeTab(i);
+          }
         });
         tabEl.appendChild(closeX);
       }
@@ -629,37 +1355,71 @@ export default async function ({ addon, msg, console }) {
     if (!tabs.some((t) => t.type === "compare")) {
       const insertAt = Math.max(1, tabs.findIndex((t) => t.type === "current") + 1);
       tabs.splice(insertAt, 0, {
-        type: "compare", label: "Compare", compareState: "chooser",
-        referenceContent: "", referenceLabel: "",
+        type: "compare",
+        label: "Compare",
+        compareState: "chooser",
+        referenceContent: "",
+        referenceLabel: "",
       });
     }
   }
 
   async function handleGotoBlock(raw, cardEl = null) {
     await ensureBlocklyReady();
-    const stripped = raw.trim()
-      .replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "").trim();
+    const stripped = raw
+      .trim()
+      .replace(/^```[\w]*\n?/, "")
+      .replace(/\n?```$/, "")
+      .trim();
     const lines = stripped.split("\n");
     const firstLine = lines[0] ?? "";
-    const idMatch = firstLine.match(/\[\u2192\s*([^\]]+)\]/);
-    const blockId = idMatch ? idMatch[1].trim() : stripped.replace(/^\[\u2192\s*/, "").replace(/\]$/, "").trim();
+    // Use greedy .* so IDs containing ] characters match to the final ] on the line.
+    const idMatch = firstLine.match(/\[\u2192\s*(.*)\]/);
+    const blockId = idMatch
+      ? idMatch[1].trim()
+      : stripped
+          .replace(/^\[\u2192\s*/, "")
+          .replace(/\]$/, "")
+          .trim();
+    console.log(`[inspector] goto: firstLine=${JSON.stringify(firstLine)} → blockId=${JSON.stringify(blockId)}`);
     const spriteName = firstLine.split("|")[0].trim();
     const vm = addon.tab.redux.state?.scratchGui?.vm;
-    if (vm && spriteName) {
-      const target = vm.runtime.targets.find((t) => !t.isStage && t.getName() === spriteName)
-        ?? vm.runtime.targets.find((t) => !t.isStage && t.getName().toLowerCase() === spriteName.toLowerCase());
-      if (target && target.id !== vm.editingTarget?.id) {
-        vm.setEditingTarget(target.id);
-        await new Promise((resolve) => setTimeout(resolve, 50));
+    // Try named-sprite switch first, then fall back to searching all targets by block ID.
+    let resolvedTarget = null;
+    if (vm) {
+      if (spriteName && !spriteName.includes("\u2192")) {
+        resolvedTarget =
+          vm.runtime.targets.find((t) => !t.isStage && t.getName() === spriteName) ??
+          vm.runtime.targets.find((t) => !t.isStage && t.getName().toLowerCase() === spriteName.toLowerCase());
+      }
+      if (!resolvedTarget) {
+        // No sprite name in the citation, or no match — search every target for the block ID
+        resolvedTarget = vm.runtime.targets.find((t) => !!t.blocks.getBlock(blockId));
+        if (resolvedTarget) console.log(`[inspector] Found block in target: ${resolvedTarget.getName()}`);
+      }
+      if (resolvedTarget && resolvedTarget.id !== vm.editingTarget?.id) {
+        vm.setEditingTarget(resolvedTarget.id);
+        await new Promise((resolve) => setTimeout(resolve, 80));
       }
     }
     const workspace = addon.tab.traps.getWorkspace();
-    if (!workspace) { alert("No Scratch workspace found — is the project open in editor mode?"); return; }
+    if (!workspace) {
+      alert("No Scratch workspace found — is the project open in editor mode?");
+      return;
+    }
     const block = workspace.getBlockById(blockId);
-    if (!block) { alert(`Block not found: ${blockId}`); return; }
+    if (!block) {
+      console.warn(
+        `[inspector] Block not found. ID=${JSON.stringify(blockId)} firstLine=${JSON.stringify(firstLine)} raw=${JSON.stringify(raw)}`
+      );
+      alert(`Block not found: ${blockId}`);
+      return;
+    }
     scrollBlockIntoViewIfNeeded(workspace, block, 64, 64, false).then(() => flashBlock(block));
     if (cardEl) {
-      issuesContent.querySelectorAll(".sa-inspector-issue-card").forEach((c) => c.classList.remove("sa-inspector-card-active"));
+      issuesContent
+        .querySelectorAll(".sa-inspector-issue-card")
+        .forEach((c) => c.classList.remove("sa-inspector-card-active"));
       cardEl.classList.add("sa-inspector-card-active");
     }
   }
@@ -729,24 +1489,27 @@ export default async function ({ addon, msg, console }) {
     // Locate the End-of-Central-Directory record (signature 0x06054b50) by scanning from the end.
     let eocd = -1;
     for (let i = buf.byteLength - 22; i >= 0; i--) {
-      if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+      if (view.getUint32(i, true) === 0x06054b50) {
+        eocd = i;
+        break;
+      }
     }
     if (eocd === -1) throw new Error("Not a valid ZIP file");
 
     const cdOffset = view.getUint32(eocd + 16, true);
-    const cdCount  = view.getUint16(eocd + 8, true);
+    const cdCount = view.getUint16(eocd + 8, true);
 
     // Walk the Central Directory to find project.json.
     let cdPos = cdOffset;
     for (let i = 0; i < cdCount; i++) {
       if (view.getUint32(cdPos, true) !== 0x02014b50) throw new Error("Bad central directory entry");
-      const compression  = view.getUint16(cdPos + 10, true);
-      const compSize     = view.getUint32(cdPos + 20, true);
-      const uncompSize   = view.getUint32(cdPos + 24, true);
-      const fnLen        = view.getUint16(cdPos + 28, true);
-      const extraLen     = view.getUint16(cdPos + 30, true);
-      const commentLen   = view.getUint16(cdPos + 32, true);
-      const localOffset  = view.getUint32(cdPos + 42, true);
+      const compression = view.getUint16(cdPos + 10, true);
+      const compSize = view.getUint32(cdPos + 20, true);
+      const uncompSize = view.getUint32(cdPos + 24, true);
+      const fnLen = view.getUint16(cdPos + 28, true);
+      const extraLen = view.getUint16(cdPos + 30, true);
+      const commentLen = view.getUint16(cdPos + 32, true);
+      const localOffset = view.getUint32(cdPos + 42, true);
       const name = new TextDecoder().decode(new Uint8Array(buf, cdPos + 46, fnLen));
       cdPos += 46 + fnLen + extraLen + commentLen;
 
@@ -778,24 +1541,236 @@ export default async function ({ addon, msg, console }) {
     throw new Error('"project.json" not found in .sb3 file');
   }
 
+  // ─── GitHub Models API ────────────────────────────────────────────────────
+
+  // Returns true if an API token has been configured.
+  function hasApiToken() {
+    return !!(addon.settings.get("apiToken") ?? "").trim();
+  }
+
+  // ─── Scratch pseudocode system prompt ────────────────────────────────────────
+  // Injected as the system role on every API call so the LLM always writes
+  // well-formed pseudocode that our parser can convert back to Scratch blocks.
+  const SCRATCH_SYSTEM_PROMPT = `\
+You are a Scratch programming assistant. You write pseudocode that maps directly to Scratch blocks — every line must correspond to a real Scratch block or control structure. There is no arbitrary code: no functions, no arrays, no break/continue, no return values. Only what Scratch blocks can do.
+
+You may use ANY real Scratch block that exists. The syntax examples below are not exhaustive — they show the formatting conventions you must follow. The critical rules at the bottom are strict constraints that must always be obeyed.
+
+## Scratch pseudocode syntax
+
+Hat blocks (script starters):
+  on green-flag:
+  when green-flag clicked:
+  when [key] key pressed:
+  when this sprite clicked:
+  when I receive [broadcast]:
+  when I start as a clone:
+  define blockName (param1) (param2)
+  define warp blockName (param1) (param2)   ← "run without screen refresh" (faster, no rendering between calls)
+
+Custom block calls (invoke a defined block by name with argument values in parens):
+  blockName (value1) (value2)
+
+Control blocks (always use 'end' to close, indented body):
+  repeat (N):
+    ...body...
+  end
+
+  repeat until <condition>:
+    ...body...
+  end
+
+  forever:
+    ...body...
+  end
+
+  if <condition> then:
+    ...body...
+  end
+
+  if <condition> then:
+    ...body...
+  else:
+    ...body...
+  end
+
+Variables and lists (use EXACT names from the project, with brackets/parens as shown):
+  set [varName] to (value)
+  change [varName] by (amount)
+  (varName)               ← reporter (reads the variable)
+  [listName]              ← list literal/reference
+  (item (i) of [listName])
+  (length of [listName])
+  replace item (i) of [listName] with (value)
+  add (value) to [listName]
+  delete (i) of [listName]
+  delete all of [listName]
+  insert (value) at (i) of [listName]
+  (item # of (value) in [listName])  ← finds position of value in list (0 if not found)
+
+Operators:
+  ((a) + (b))   ((a) - (b))   ((a) * (b))   ((a) / (b))   ((a) mod (b))
+  <(a) > (b)>   <(a) < (b)>   <(a) = (b)>
+  Scratch does NOT have <= or >=. Use <not <(a) > (b)>> for "a <= b" and <not <(a) < (b)>> for "a >= b".
+  <condition1> and <condition2>
+  <condition1> or <condition2>
+  not <condition>
+
+Looks / sound / motion — use exact block names:
+  say [message]
+  say [message] for (secs) secs
+  move (steps) steps
+  go to x: (x) y: (y)
+  play sound [name] until done
+
+## Critical rules
+1. Use the EXACT variable, list, and broadcast names already in the project — do NOT rename, shorten, or generalise them. If the project has [my list], write [my list], not [list] or [arr].
+2. Keep variable names SHORT and practical (i, j, temp, swapped) — do not invent long descriptive names like "current item" or "list size" when a short name works.
+3. Do NOT use :: type annotations (no ":: list" or ":: variables").
+4. Do NOT use the word "when" in hat blocks except for the accepted forms above — use "on green-flag:" not "when green flag clicked:".
+5. Do NOT add comments inside pseudocode blocks — keep the code clean.
+6. When writing an algorithm that needs loop counters, use single-letter names (i, j, k) unless the project already has longer names.
+7. Produce complete, working pseudocode — not partial snippets.
+8. Do NOT use "break" — Scratch has no break statement. The only early-exit is "stop this script", which stops the ENTIRE script immediately (not just the current loop). To exit a loop early without stopping everything, use a flag variable with repeat until instead.
+9. Do NOT use "repeat index" or any other invented reporter. Scratch has no built-in loop counter — use a variable: set [i] to (1) before the loop, then change [i] by (1) at the end of each iteration.
+10. Every "if" block MUST have a complete condition in angle brackets: if <condition> then: — never write "if  then:" or leave the condition blank.
+11. Only use reporters and blocks that genuinely exist in Scratch. Do not invent new block names or reporters that Scratch does not have.
+12. Scratch has no <= or >= operators. Never write them. Write <not <(a) > (b)>> for "a ≤ b" and <not <(a) < (b)>> for "a ≥ b".
+13. Prefer fewer total block operations. Using delete+insert to place an item executes 2 operations; shifting N items with replace executes N operations. Choose whichever approach runs fewer blocks in total.
+14. Out-of-bounds list access: (item (0) of [list]) and (item (n) of [list]) where n > length both return "" (empty string). This can be used deliberately, e.g. as a sentinel value to avoid a separate bounds check.
+15. When using a custom block (define ...), ALWAYS include the full define script AND all calling scripts. Never write a call to a custom block without also providing its definition. Use "define warp ..." for recursive or inner-loop procedures — it runs without screen refresh and is significantly faster.
+16. Do NOT write "end" after hat blocks (on green-flag:, define ..., when ...). Hat blocks are not c-blocks and have no closing "end". Only repeat, forever, if, and if/else blocks use "end".
+17. Scratch has NO local variables. Variables do NOT have block scope or function scope. Every variable you declare is a sprite-level variable (visible across all scripts of that sprite) or a global variable (on the stage). There is no way to declare a variable "inside" a custom block so that it disappears when the block ends. If a script needs a temporary value, simply use a sprite variable (e.g. [temp]) — it is shared across the whole sprite. Never describe a variable as "local" or "declared inside" a block.
+18. RECURSIVE custom blocks and sprite variables DO NOT MIX. Custom block parameters (the values in the define line) are call-stack-local — each recursive invocation gets its own copy. Sprite variables are NOT: every recursive call overwrites the same variable, so any value a caller stored before making a recursive call will be gone when control returns. This makes classic recursive divide-and-conquer algorithms (quicksort, mergesort, tree traversal) impossible to implement correctly in Scratch using variables for intermediate state — even a single "result" variable written by a helper will be overwritten before the caller can use it, if the caller itself recurses. The correct Scratch solution is to ELIMINATE RECURSION ENTIRELY and replace it with an explicit work stack using lists: push the initial work range onto the stack, then loop until the stack is empty, popping one item per iteration, doing the non-recursive work (e.g. partitioning), and pushing any sub-ranges back onto the stack. Non-recursive helper blocks (blocks that do not call themselves) are safe to use variables in, because there is no deeper call to clobber them.
+`;
+
+  // Call the GitHub Models API and stream the response text into `tab`.
+  // `tab` must already be pushed into `tabs` and displayed before calling.
+  // On each chunk the Issues tab is re-rendered in streaming state.
+  async function streamToIssuesTab(promptText, tab) {
+    const token = (addon.settings.get("apiToken") ?? "").trim();
+    const model = (addon.settings.get("apiModel") ?? "gpt-4o").trim();
+
+    tab.issueState = "streaming";
+    tab.streamText = "";
+    renderIssuesContent(tab);
+
+    let response;
+    try {
+      response = await fetch("https://models.inference.ai.azure.com/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: SCRATCH_SYSTEM_PROMPT },
+            { role: "user", content: promptText },
+          ],
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+      });
+    } catch (e) {
+      tab.issueState = "paste";
+      renderIssuesContent(tab);
+      alert(`API request failed: ${e}`);
+      return;
+    }
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      tab.issueState = "paste";
+      renderIssuesContent(tab);
+      alert(`GitHub Models API error ${response.status}: ${body.slice(0, 200)}`);
+      return;
+    }
+
+    // Read the SSE stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    // Keep live references via tab object (set by renderIssuesContent)
+    let firstChunk = true;
+    let usageIn = 0,
+      usageOut = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6).trim();
+        if (data === "[DONE]") continue;
+        try {
+          const chunk = JSON.parse(data);
+          // Capture usage stats — usually in the final chunk
+          if (chunk.usage) {
+            usageIn = chunk.usage.prompt_tokens ?? usageIn;
+            usageOut = chunk.usage.completion_tokens ?? usageOut;
+          }
+          const delta = chunk.choices?.[0]?.delta?.content;
+          if (delta) {
+            if (firstChunk && tab._streamHeader) {
+              tab._streamHeader.textContent = "⏳ Receiving response…";
+              tab._streamHeader.classList.remove("sa-inspector-stream-waiting");
+              firstChunk = false;
+            }
+            tab.streamText += delta;
+            if (tab._streamContainer) renderStreamingMarkdown(tab.streamText, tab._streamContainer);
+          }
+        } catch {
+          /* ignore malformed chunks */
+        }
+      }
+    }
+
+    // Stream finished — render full markdown response
+    tab.issueState = tab.streamText.trim().length > 0 ? "cards" : "paste";
+    tab.content = tab.streamText;
+    // Estimate cost. If the API returned usage data, use it; otherwise approximate
+    // from character count (rough heuristic: ~4 chars per token).
+    const costPerMTok = {
+      "gpt-4o": { in: 2.5, out: 10.0 },
+      "gpt-4.1": { in: 2.0, out: 8.0 },
+      "gpt-4o-mini": { in: 0.15, out: 0.6 },
+      "o4-mini": { in: 1.1, out: 4.4 },
+      "claude-3-7-sonnet": { in: 3.0, out: 15.0 },
+    };
+    const rates = costPerMTok[model] ?? { in: 2.5, out: 10.0 };
+    if (usageIn === 0) {
+      // API didn't return usage — estimate from prompt/response char counts
+      usageIn = Math.round(promptText.length / 4);
+      usageOut = Math.round(tab.streamText.length / 4);
+    }
+    const estCostUsd = (usageIn / 1e6) * rates.in + (usageOut / 1e6) * rates.out;
+    tab._usageSummary = `${usageIn.toLocaleString()} in / ${usageOut.toLocaleString()} out tokens ≈ $${estCostUsd.toFixed(4)}`;
+    renderIssuesContent(tab);
+  }
+
   // Build a comparison prompt for an LLM given student and reference pseudocode.
-  function buildBugPrompt(studentCode, bugDescription) {
+  function buildAskPrompt(projectCode, question) {
     return [
-      `I'm investigating a possible bug in a Scratch project. The bug I'm trying to understand is:`,
-      `"${bugDescription}"`,
+      "Below is a Scratch project exported as pseudocode.",
       "",
-      "Below is the full project as pseudocode. Please:",
-      "1. Identify the most likely cause of this bug in the code.",
-      "2. Explain exactly what the code does vs. what it should do.",
-      "3. Cite any relevant scripts using fenced code blocks. The first line of each block must be:",
-      "   SpriteName | hat block description | [→ blockId]",
-      "   Subsequent lines show the relevant pseudocode and what is wrong.",
-      "4. If there are other closely related bugs you notice, mention them briefly at the end.",
+      "My question or request is:",
+      `"${question}"`,
+      "",
+      "Please answer directly and concisely, based specifically on this project's code.",
+      "When referencing or writing a specific script, wrap it in a fenced code block whose first line is:",
+      "  SpriteName | hat block description | [→ blockId]",
+      "Subsequent lines show the relevant pseudocode.",
       "",
       "=".repeat(60),
       "PROJECT",
       "=".repeat(60),
-      studentCode,
+      projectCode,
     ].join("\n");
   }
 
@@ -806,12 +1781,16 @@ export default async function ({ addon, msg, console }) {
       "Match scripts by sprite name, hat block type, and structure — NOT by SCRIPT number.",
       "Empty scripts in the reference are placeholders; ignore them.",
       "",
+      "VARIABLE AND LIST NAMES: Students often rename variables and lists (e.g. 'lives' instead of 'Lives', 'vel' instead of 'xVelocity'). Check consistency WITHIN THE STUDENT PROJECT ONLY — not against the reference names. If the renamed variable is set and read consistently within the student project and the logic is equivalent, this is NOT a bug. Only flag a variable/list as broken if within the student project one script sets [x] but another reads [y] for the same conceptual value, or if a variable that must be global (shared across sprites) is accidentally scoped to a single sprite.",
+      "BROADCAST NAMES: Students often rename broadcasts (e.g. 'startGame' instead of 'Start'). Check consistency WITHIN THE STUDENT PROJECT ONLY — not against the reference names. If every 'broadcast [X]' in the student project is matched by a 'when I receive [X]' handler somewhere in the student project, the rename is consistent and NOT a bug. Only flag a broadcast as broken if a broadcast is sent but has NO matching receiver in the student project, or a receiver has no matching sender in the student project.",
+      "CUSTOM BLOCK (PROCEDURE) NAMES: Students often rename custom blocks (e.g. 'move player' instead of 'movePlayer'). Check consistency WITHIN THE STUDENT PROJECT ONLY. If the renamed block is defined and called consistently within the student project, this is NOT a bug. Only flag a custom block as broken if a call has no matching definition in the student project, or a definition is never called.",
+      "",
       "Report under exactly these headings, in this order:",
-      "1. Breaking bugs — changes almost certain to prevent the game working correctly (e.g. wrong condition, missing broadcast, wrong variable). List the most game-breaking first.",
-      "   IMPORTANT: check variable scope — variables listed under STAGE are global (for all sprites); variables listed under a SPRITE are local (for this sprite only). A variable that should be local but is global (or vice versa) is a common breaking bug in Scratch.",
+      "1. Breaking bugs — changes almost certain to prevent the game working correctly (e.g. wrong condition, missing broadcast, wrong operator, wrong variable scope). List the most game-breaking first. Do NOT list variable renames that preserve the logic.",
+      "   IMPORTANT: check variable scope — variables listed under STAGE are global (for all sprites); variables listed under a SPRITE are local (for this sprite only). A variable that should be global but is local (or vice versa) is a breaking bug — the wrong sprite will read it.",
       "2. Likely bugs — code that looks wrong but might only affect some situations.",
       "3. Missing scripts — scripts present in the reference but absent from the student project.",
-      "4. Intentional differences — things that differ but are probably deliberate. Keep this brief.",
+      "4. Intentional differences — things that differ but are probably deliberate, including variable/list renames, broadcast renames, and custom block renames where the logic is preserved. Keep this section brief.",
       "",
       "When citing a bug, always wrap the evidence in a fenced code block. The first line must be: SpriteName | hat block description | [→ blockId]",
       "Subsequent lines show the relevant pseudocode and what is wrong. Example:",
@@ -819,7 +1798,7 @@ export default async function ({ addon, msg, console }) {
       "Laser | when I start as a clone | [→ -P|Ws|MMN@a3)1rr`2N9]",
       "change x by (ShakeDY)   ← should be ShakeDX",
       "\`\`\`",
-      "Be specific about what differs from the reference.",
+      "Be specific about what differs from the reference. Prioritise bugs that would stop the game running or make it unwinnable.",
       "",
       "=".repeat(60),
       "STUDENT PROJECT",
@@ -1130,8 +2109,7 @@ export default async function ({ addon, msg, console }) {
     motion_gotoxy: (b, blocks) => `go to x: ${resolveInput(blocks, b, "X")} y: ${resolveInput(blocks, b, "Y")}`,
     motion_glidesecstoxy: (b, blocks) =>
       `glide ${resolveInput(blocks, b, "SECS")} secs to x: ${resolveInput(blocks, b, "X")} y: ${resolveInput(blocks, b, "Y")}`,
-    motion_glideto: (b, blocks) =>
-      `glide ${resolveInput(blocks, b, "SECS")} secs to ${resolveSlot(blocks, b, "TO")}`,
+    motion_glideto: (b, blocks) => `glide ${resolveInput(blocks, b, "SECS")} secs to ${resolveSlot(blocks, b, "TO")}`,
     motion_pointindirection: (b, blocks) => `point in direction ${resolveInput(blocks, b, "DIRECTION")}`,
     motion_pointtowards: (b, blocks) => `point towards ${resolveSlot(blocks, b, "TOWARDS")}`,
     motion_changexby: (b, blocks) => `change x by ${resolveInput(blocks, b, "DX")}`,
@@ -1192,7 +2170,8 @@ export default async function ({ addon, msg, console }) {
 
     // Variable set/change targets — [name]
     data_setvariableto: (b, blocks) => `set [${qVar(field(b, "VARIABLE"))}] to ${resolveInput(blocks, b, "VALUE")}`,
-    data_changevariableby: (b, blocks) => `change [${qVar(field(b, "VARIABLE"))}] by ${resolveInput(blocks, b, "VALUE")}`,
+    data_changevariableby: (b, blocks) =>
+      `change [${qVar(field(b, "VARIABLE"))}] by ${resolveInput(blocks, b, "VALUE")}`,
     data_showvariable: (b) => `show variable [${qVar(field(b, "VARIABLE"))}]`,
     data_hidevariable: (b) => `hide variable [${qVar(field(b, "VARIABLE"))}]`,
 
@@ -1394,7 +2373,7 @@ export default async function ({ addon, msg, console }) {
           display = Number.isInteger(n) ? String(n) : String(parseFloat(n.toPrecision(4)));
         } else {
           const quoted = `"${value}"`;
-          display = quoted.length > 40 ? quoted.slice(0, 40) + "…\"" : quoted;
+          display = quoted.length > 40 ? quoted.slice(0, 40) + '…"' : quoted;
         }
         lines.push(`    ${name} = ${display}`);
       }
@@ -1429,8 +2408,8 @@ export default async function ({ addon, msg, console }) {
         const protoId = typeof protoInput?.[1] === "string" ? protoInput[1] : null;
         const proto = protoId ? blocks[protoId] : null;
         const warp = proto?.mutation?.warp;
-        const warpTag = (warp === "true" || warp === true) ? " [warp: true]" : " [warp: false]";
-        lines.push("    define " + getProcSignature(blocks, topBlock) + ":" + warpTag);
+        const warpPrefix = warp === "true" || warp === true ? "warp " : "";
+        lines.push("    define " + warpPrefix + getProcSignature(blocks, topBlock) + ":");
       } else {
         const hatFmt = STATEMENT_FORMATTERS[topBlock.opcode];
         if (hatFmt) lines.push("    " + hatFmt(topBlock, blocks));

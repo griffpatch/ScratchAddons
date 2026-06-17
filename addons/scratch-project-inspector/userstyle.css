@@ -41,8 +41,12 @@
   border-bottom: 1px solid #45475a;
   border-radius: 8px 8px 0 0;
   flex-shrink: 0;
-  min-height: 32px;
+  min-height: 32px;  cursor: grab;
+  user-select: none;
 }
+
+.sa-inspector-toolbar:active {
+  cursor: grabbing;}
 
 .sa-inspector-tabs {
   display: flex;
@@ -79,6 +83,13 @@
 .sa-inspector-tab-active {
   background: #1e1e2e;
   color: #cdd6f4;
+}
+
+/* Active tab accent underline — colour per tab type set via JS class on panel */
+.sa-inspector-panel[data-tab-type="current"] .sa-inspector-tab-active,
+.sa-inspector-panel[data-tab-type="compare"] .sa-inspector-tab-active,
+.sa-inspector-panel[data-tab-type="issues"] .sa-inspector-tab-active {
+  border-bottom: 2px solid currentColor;
 }
 
 .sa-inspector-tab-close {
@@ -142,7 +153,19 @@
   font-family: monospace;
   line-height: 1.5;
   white-space: pre;
-  background: #1e1e2e;
+  background: #181825;
+}
+
+/* Per-tab-type body tints */
+.sa-inspector-matches {
+  background: #1a1b2e;
+}
+
+.sa-inspector-issues {
+  background: #1b1a2a;
+  border-left: 2px solid #cba6f7;
+  /* override white-space: pre from .sa-inspector-content so text wraps */
+  white-space: normal;
 }
 
 /* ── Overlay copy button (bottom-right of code area) ──────────────────────── */
@@ -169,7 +192,135 @@
   background: #45475a;
 }
 
+/* ── Overlay inject button (bottom-right, to the left of copy button) ──────── */
+.sa-inspector-overlay-inject {
+  position: absolute;
+  bottom: 0.6rem;
+  right: 3rem;
+  background: rgba(49, 50, 68, 0.85);
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.45rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sa-inspector-body:hover .sa-inspector-overlay-inject {
+  opacity: 1;
+}
+
+.sa-inspector-overlay-inject:hover {
+  background: #45475a;
+}
+
+.sa-inspector-overlay-inject:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 /* ── Issues tab ───────────────────────────────────────── */
+
+/* ── Markdown rendering inside issues tab ─────────────── */
+.sa-inspector-issues .sa-inspector-md-h {
+  color: #89b4fa;
+  font-family: sans-serif;
+  font-weight: 700;
+  margin: 0.7rem 0 0.25rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid #313244;
+  line-height: 1.3;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.sa-inspector-issues h2.sa-inspector-md-h { font-size: 0.95rem; }
+.sa-inspector-issues h3.sa-inspector-md-h { font-size: 0.85rem; }
+.sa-inspector-issues h4.sa-inspector-md-h { font-size: 0.8rem; color: #cdd6f4; border-bottom: none; }
+.sa-inspector-issues h5.sa-inspector-md-h { font-size: 0.78rem; color: #6c7086; border-bottom: none; }
+
+.sa-inspector-issues .sa-inspector-md-p {
+  color: #cdd6f4;
+  font-family: sans-serif;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  margin: 0.25rem 0;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.sa-inspector-issues .sa-inspector-md-list {
+  color: #cdd6f4;
+  font-family: sans-serif;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  margin: 0.2rem 0 0.2rem 1.2rem;
+  padding: 0;
+}
+
+.sa-inspector-issues .sa-inspector-md-list li {
+  margin-bottom: 0.15rem;
+}
+
+.sa-inspector-issues .sa-inspector-md-pre {
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.4rem 0;
+  overflow-x: auto;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+/* Wrapper so the Parse button sits below the code block */
+.sa-inspector-md-pre-wrap {
+  position: relative;
+  margin: 0.4rem 0;
+}
+
+.sa-inspector-md-pre-wrap .sa-inspector-md-pre {
+  margin: 0;
+}
+
+.sa-inspector-code-parse-btn {
+  display: none;
+  margin-top: 0.2rem;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+}
+
+.sa-inspector-md-pre-wrap:hover .sa-inspector-code-parse-btn {
+  display: inline-block;
+}
+
+.sa-inspector-code-parse-btn:hover {
+  background: #45475a;
+}
+
+.sa-inspector-issues .sa-inspector-md-pre code {
+  color: #a6e3a1;
+  font-family: monospace;
+}
+
+.sa-inspector-md-code {
+  background: #313244;
+  color: #fab387;
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+  font-size: 0.85em;
+  font-family: monospace;
+}
 
 .sa-inspector-issue-section {
   margin: 0.4rem 0 0.2rem;
@@ -235,7 +386,99 @@
   background: #1e1e2e;
 }
 
-.sa-inspector-compare-divider {
+.sa-inspector-ast-warnings {
+  background: #2a1f3a;
+  border: 1px solid #f38ba8;
+  border-radius: 5px;
+  color: #f38ba8;
+  font-family: sans-serif;
+  font-size: 0.72rem;
+  padding: 0.35rem 0.7rem;
+  margin-bottom: 0.6rem;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.sa-inspector-ast-script-card {
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+}
+
+.sa-inspector-ast-script-header {
+  background: #27273a;
+  color: #89b4fa;
+  font-family: sans-serif;
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid #45475a;
+}
+
+.sa-inspector-ast-subtabs {
+  display: flex;
+  border-bottom: 1px solid #45475a;
+  background: #181825;
+}
+
+.sa-inspector-ast-subtab {
+  background: transparent;
+  border: none;
+  border-right: 1px solid #45475a;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0.25rem 0.7rem;
+  white-space: nowrap;
+}
+
+.sa-inspector-ast-subtab:hover {
+  background: #313244;
+  color: #cdd6f4;
+}
+
+.sa-inspector-ast-subtab-active {
+  background: #1e1e2e;
+  color: #cba6f7;
+  border-bottom: 2px solid #cba6f7;
+}
+
+.sa-inspector-ast-pane {
+  padding: 0.5rem 0.75rem;
+}
+
+.sa-inspector-ast-pre {
+  margin: 0;
+  background: #11111b;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  color: #a6e3a1;
+  font-family: monospace;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.sa-inspector-ast-inject-info {
+  color: #cdd6f4;
+  font-family: sans-serif;
+  font-size: 0.78rem;
+  margin: 0 0 0.5rem;
+}
+
+.sa-inspector-ast-inject-log {
+  margin-top: 0.5rem;
+  color: #cdd6f4;
+  min-height: 1.5rem;
+}
+
+
   height: 1px;
   background: #45475a;
   margin: 0.25rem 0;
@@ -303,6 +546,19 @@
   white-space: pre;
 }
 
+.sa-inspector-usage-summary {
+  font-family: sans-serif;
+  font-size: 0.7rem;
+  color: #6c7086;
+  padding: 0.3rem 0.75rem;
+  background: #1b1a2a;
+  border-top: 1px solid #313244;
+  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+}
+
 .sa-inspector-paste-area {
   width: 100%;
   box-sizing: border-box;
@@ -323,6 +579,63 @@
   align-self: flex-start;
 }
 
+/* ── Themed scrollbars ────────────────────────────────────── */
+.sa-inspector-panel ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.sa-inspector-panel ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sa-inspector-panel ::-webkit-scrollbar-thumb {
+  background: #45475a;
+  border-radius: 3px;
+}
+
+.sa-inspector-panel ::-webkit-scrollbar-thumb:hover {
+  background: #6c7086;
+}
+
+.sa-inspector-panel ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox */
+.sa-inspector-panel * {
+  scrollbar-width: thin;
+  scrollbar-color: #45475a transparent;
+}
+
+/* ── Streaming markdown container ────────────────────────── */
+.sa-inspector-stream-md {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 1rem;  white-space: normal;}
+
+.sa-inspector-stream-tail {
+  border-left: 2px solid #45475a;
+  color: #6c7086;
+  font-style: italic;
+}
+
+/* ── Streaming state ─────────────────────────────────────── */
+@keyframes sa-inspector-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.sa-inspector-stream-waiting {
+  animation: sa-inspector-pulse 1.2s ease-in-out infinite;
+}
+
+.sa-inspector-stream-pre {
+  flex: 1;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 .sa-inspector-matches {
   flex-direction: column;
