@@ -1,46 +1,6 @@
 export default async function ({ addon, msg, console }) {
-  const { scrollBlockIntoViewIfNeeded, initializeSmoothScrolling } =
-    await import("../../../libraries/common/cs/block-scrolling.js");
-  const { parsePseudocode } = await import("./pseudocode-parser.js");
-  const { astToBlocks } = await import("./ast-to-blocks.js");
-
-  // Lazy Blockly init — only needed when navigating to a block.
-  // Avoids hanging on project pages that are not in editor mode.
-  let blocklyReady = false;
-  async function ensureBlocklyReady() {
-    if (blocklyReady) return;
-    const Blockly = await addon.tab.traps.getBlockly();
-    initializeSmoothScrolling(Blockly);
-    blocklyReady = true;
-  }
-
-  // ─── Flash a block's SVG path yellow 3 times ───────────────────────────────
-  let _flashTimer = 0;
-  let _flashBlock = null;
-  function flashBlock(block) {
-    if (_flashTimer) {
-      clearTimeout(_flashTimer);
-    }
-    const getPath = (b) => b?.pathObject?.svgPath ?? b?.svgPath_ ?? null;
-    let count = 4;
-    let on = true;
-    _flashBlock = block;
-    const _tick = () => {
-      const path = getPath(_flashBlock);
-      if (path) path.style.fill = on ? "#ffff80" : "";
-      on = !on;
-      count--;
-      if (count > 0) {
-        _flashTimer = setTimeout(_tick, 200);
-      } else {
-        _flashTimer = 0;
-        if (path) path.style.fill = "";
-        _flashBlock = null;
-      }
-    };
-    _tick();
-  }
   // ─── Toolbar button (single icon) ─────────────────────────────────────────
+  // Created first so the button appears immediately even if later imports fail.
 
   const nav = await addon.tab.waitForElement("[class*='menu-bar_account-info-group_'] > [href^='/mystuff']", {
     markAsSeen: true,
@@ -57,6 +17,74 @@ export default async function ({ addon, msg, console }) {
   addon.tab.displayNoneWhileDisabled(toolbarBtn);
   nav.parentElement.insertBefore(toolbarBtn, nav);
   toolbarBtn.addEventListener("click", handleToolbarClick);
+
+  // ─── Lazy imports (deferred until first use) ───────────────────────────────
+  // Keeping these lazy means a syntax error in parser/converter files won't
+  // prevent the toolbar button from appearing.
+
+  let _parsePseudocode = null;
+  async function getParsePseudocode() {
+    if (!_parsePseudocode) {
+      const mod = await import("./pseudocode-parser.js");
+      _parsePseudocode = mod.parsePseudocode;
+    }
+    return _parsePseudocode;
+  }
+
+  let _astToBlocks = null;
+  async function getAstToBlocks() {
+    if (!_astToBlocks) {
+      const mod = await import("./ast-to-blocks.js");
+      _astToBlocks = mod.astToBlocks;
+    }
+    return _astToBlocks;
+  }
+
+  // Smooth-scrolling helpers — only needed when navigating to a block.
+  let _scrollBlockIntoViewIfNeeded = null;
+  let _initializeSmoothScrolling = null;
+  async function ensureScrollingLoaded() {
+    if (!_scrollBlockIntoViewIfNeeded) {
+      const mod = await import("../../../libraries/common/cs/block-scrolling.js");
+      _scrollBlockIntoViewIfNeeded = mod.scrollBlockIntoViewIfNeeded;
+      _initializeSmoothScrolling = mod.initializeSmoothScrolling;
+    }
+  }
+
+  // ─── Blockly / flash helpers (use lazy imports) ───────────────────────────
+
+  let blocklyReady = false;
+  async function ensureBlocklyReady() {
+    if (blocklyReady) return;
+    await ensureScrollingLoaded();
+    const Blockly = await addon.tab.traps.getBlockly();
+    _initializeSmoothScrolling(Blockly);
+    blocklyReady = true;
+  }
+
+  let _flashTimer = 0;
+  let _flashBlock = null;
+  function flashBlock(block) {
+    if (_flashTimer) clearTimeout(_flashTimer);
+    const getPath = (b) => b?.pathObject?.svgPath ?? b?.svgPath_ ?? null;
+    let count = 4,
+      on = true;
+    _flashBlock = block;
+    const _tick = () => {
+      const path = getPath(_flashBlock);
+      if (path) path.style.fill = on ? "#ffff80" : "";
+      on = !on;
+      count--;
+      if (count > 0) {
+        _flashTimer = setTimeout(_tick, 200);
+      } else {
+        _flashTimer = 0;
+        if (path) path.style.fill = "";
+        _flashBlock = null;
+      }
+    };
+    _tick();
+  }
 
   // ─── Panel state ───────────────────────────────────────────────────────────
 
@@ -290,12 +318,13 @@ export default async function ({ addon, msg, console }) {
       title: "Parse pseudocode → AST (developer tool)",
       textContent: "🧪 Parse",
     });
-    parseTestBtn.addEventListener("click", () => {
+    parseTestBtn.addEventListener("click", async () => {
       const pseudo = tabs.find((t) => t.type === "current")?.content ?? "";
       if (!pseudo) {
         alert("No pseudocode loaded — open a project first.");
         return;
       }
+      const parsePseudocode = await getParsePseudocode();
       const { scripts, warnings } = parsePseudocode(pseudo);
       const summary = [
         `## Parse result`,
@@ -526,7 +555,27 @@ export default async function ({ addon, msg, console }) {
       textContent: hasApiToken() ? "📊 Analyse with AI" : "📊 Copy & open issues tab",
     });
     analyzeBtn.addEventListener("click", () => handleCopyAndAnalyze(tab));
-    header.append(labelEl, analyzeBtn);
+    const copyPromptBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn",
+      title: "Copy comparison prompt to clipboard (for pasting into any LLM)",
+      textContent: "📋",
+    });
+    copyPromptBtn.addEventListener("click", () => {
+      try {
+        const studentProject = getCurrentProjectFromVM();
+        const studentCode = projectToComparePseudocode(studentProject);
+        const promptText = buildComparisonPrompt(studentCode, tab.referenceContent, tab.referenceLabel);
+        void navigator.clipboard.writeText(promptText).then(() => {
+          copyPromptBtn.textContent = "✓";
+          setTimeout(() => {
+            copyPromptBtn.textContent = "📋";
+          }, 1500);
+        });
+      } catch (e) {
+        alert(msg("fetch-error", { error: String(e) }));
+      }
+    });
+    header.append(labelEl, analyzeBtn, copyPromptBtn);
     compareContent.appendChild(header);
 
     const pre = Object.assign(document.createElement("pre"), {
@@ -565,7 +614,7 @@ export default async function ({ addon, msg, console }) {
     let promptText;
     try {
       const studentProject = getCurrentProjectFromVM();
-      const studentCode = projectToPseudocode(studentProject);
+      const studentCode = projectToComparePseudocode(studentProject);
       promptText = buildComparisonPrompt(studentCode, tab.referenceContent, tab.referenceLabel);
     } catch (e) {
       alert(msg("fetch-error", { error: String(e) }));
@@ -576,7 +625,7 @@ export default async function ({ addon, msg, console }) {
     switchTab(tabs.length - 1);
     renderTabs();
     if (hasApiToken()) {
-      void streamToIssuesTab(promptText, newTab);
+      void streamToIssuesTab(promptText, newTab, COMPARE_SYSTEM_PROMPT);
     } else {
       void navigator.clipboard.writeText(promptText);
     }
@@ -655,7 +704,7 @@ export default async function ({ addon, msg, console }) {
           id: crypto.randomUUID(),
           tutorial,
           label,
-          pseudocode: projectToPseudocode(project),
+          pseudocode: projectToComparePseudocode(project),
           fingerprint: fingerprintProject(project),
           createdAt: Date.now(),
         });
@@ -671,7 +720,7 @@ export default async function ({ addon, msg, console }) {
   // ─── Core inject logic ────────────────────────────────────────────────────
   // Injects a single parsed script into the current editing target.
   // appendLog(msg) receives diagnostic lines; onDone(ok) is called when finished.
-  function doInjectScript(script, appendLog, onDone) {
+  async function doInjectScript(script, appendLog, onDone) {
     const vm = addon.tab.traps.vm;
     appendLog(`vm: ${vm ? "ok" : "MISSING"}`);
     if (!vm) {
@@ -702,6 +751,7 @@ export default async function ({ addon, msg, console }) {
 
     try {
       delete vm._unresolvedVars;
+      const astToBlocks = await getAstToBlocks();
       const blocks = astToBlocks([script], vm, posX, posY);
       appendLog(`\nastToBlocks produced ${blocks.length} block(s):`);
 
@@ -1124,20 +1174,23 @@ export default async function ({ addon, msg, console }) {
     btn.addEventListener("click", () => {
       // Strip trailing ``` fence before parsing (matches what parseTestBtn does)
       const src = codeText.replace(/\n?```\s*$/, "");
-      const { scripts, warnings } = parsePseudocode(src);
-      const newTab = {
-        type: "issues",
-        label: "🧪 AST",
-        issueState: "cards",
-        content: "",
-        cards: [],
-        _parseSrc: src,
-        _parseWarnings: warnings,
-        _parseScripts: scripts,
-      };
-      tabs.push(newTab);
-      switchTab(tabs.length - 1);
-      renderTabs();
+      void (async () => {
+        const parsePseudocode = await getParsePseudocode();
+        const { scripts, warnings } = parsePseudocode(src);
+        const newTab = {
+          type: "issues",
+          label: "🧪 AST",
+          issueState: "cards",
+          content: "",
+          cards: [],
+          _parseSrc: src,
+          _parseWarnings: warnings,
+          _parseScripts: scripts,
+        };
+        tabs.push(newTab);
+        switchTab(tabs.length - 1);
+        renderTabs();
+      })();
     });
     return btn;
   }
@@ -1415,7 +1468,8 @@ export default async function ({ addon, msg, console }) {
       alert(`Block not found: ${blockId}`);
       return;
     }
-    scrollBlockIntoViewIfNeeded(workspace, block, 64, 64, false).then(() => flashBlock(block));
+    await ensureScrollingLoaded();
+    _scrollBlockIntoViewIfNeeded(workspace, block, 64, 64, false).then(() => flashBlock(block));
     if (cardEl) {
       issuesContent
         .querySelectorAll(".sa-inspector-issue-card")
@@ -1474,7 +1528,7 @@ export default async function ({ addon, msg, console }) {
     const projectId = input.trim();
     try {
       const project = await fetchProjectById(projectId);
-      loadCompareReference(`#${projectId}`, projectToPseudocode(project));
+      loadCompareReference(`#${projectId}`, projectToComparePseudocode(project));
     } catch (e) {
       alert(msg("fetch-error", { error: String(e) }));
     }
@@ -1551,6 +1605,15 @@ export default async function ({ addon, msg, console }) {
   // ─── Scratch pseudocode system prompt ────────────────────────────────────────
   // Injected as the system role on every API call so the LLM always writes
   // well-formed pseudocode that our parser can convert back to Scratch blocks.
+  // Short system prompt used for project comparison calls.
+  // The full SCRATCH_SYSTEM_PROMPT (code-generation rules) is not sent for
+  // comparisons — it wastes ~600 tokens and is irrelevant to bug-finding.
+  const COMPARE_SYSTEM_PROMPT = `\
+You are a Scratch programming assistant helping teachers identify bugs in student projects by comparing them to a reference implementation.
+You understand Scratch pseudocode notation: [x] = variable/list/menu target, (x) = reporter/value, <x> = boolean condition.
+Sprites each have their own local variables; the Stage has global variables accessible by all sprites.
+`;
+
   const SCRATCH_SYSTEM_PROMPT = `\
 You are a Scratch programming assistant. You write pseudocode that maps directly to Scratch blocks — every line must correspond to a real Scratch block or control structure. There is no arbitrary code: no functions, no arrays, no break/continue, no return values. Only what Scratch blocks can do.
 
@@ -1647,7 +1710,7 @@ Looks / sound / motion — use exact block names:
   // Call the GitHub Models API and stream the response text into `tab`.
   // `tab` must already be pushed into `tabs` and displayed before calling.
   // On each chunk the Issues tab is re-rendered in streaming state.
-  async function streamToIssuesTab(promptText, tab) {
+  async function streamToIssuesTab(promptText, tab, systemPrompt = SCRATCH_SYSTEM_PROMPT) {
     const token = (addon.settings.get("apiToken") ?? "").trim();
     const model = (addon.settings.get("apiModel") ?? "gpt-4o").trim();
 
@@ -1666,7 +1729,7 @@ Looks / sound / motion — use exact block names:
         body: JSON.stringify({
           model,
           messages: [
-            { role: "system", content: SCRATCH_SYSTEM_PROMPT },
+            { role: "system", content: systemPrompt },
             { role: "user", content: promptText },
           ],
           stream: true,
@@ -1822,7 +1885,7 @@ Looks / sound / motion — use exact block names:
       try {
         const project = await readSb3File(file);
         const label = file.name.replace(/\.sb[23]$/i, "");
-        loadCompareReference(label, projectToPseudocode(project));
+        loadCompareReference(label, projectToComparePseudocode(project));
       } catch (e) {
         alert(msg("fetch-error", { error: String(e) }));
       }
@@ -2454,6 +2517,74 @@ Looks / sound / motion — use exact block names:
       parts.push(targetToPseudocode(stage, true));
     }
 
+    return parts.join("\n");
+  }
+
+  // ─── Slim project renderer (for comparison) ────────────────────────────────
+  // Strips variable values, costume/backdrop names, and sound names.
+  // Keeps variable/list names (for scope analysis) and all script bodies.
+  // Saves ~20-30% tokens vs the full pseudocode for typical projects.
+  function targetToComparePseudocode(target, isStage) {
+    const lines = [];
+    const divider = "═".repeat(48);
+
+    lines.push(divider);
+    lines.push(isStage ? "STAGE" : `SPRITE: ${target.name}`);
+
+    // Variables — names only, no values (values irrelevant for bug comparison)
+    const varEntries = Object.values(target.variables ?? {});
+    if (varEntries.length) {
+      const label = isStage ? "variables (global)" : "variables (local)";
+      lines.push(`  ${label}: ${varEntries.map(([name]) => name).join(", ")}`);
+    }
+
+    // Lists — names only
+    const listEntries = Object.values(target.lists ?? {});
+    if (listEntries.length) {
+      const label = isStage ? "lists (global)" : "lists (local)";
+      lines.push(`  ${label}: ${listEntries.map(([name]) => name).join(", ")}`);
+    }
+
+    lines.push("");
+
+    // Scripts — identical to the full renderer
+    const blocks = target.blocks ?? {};
+    const scriptIds = getOrderedTopLevelIds(blocks);
+
+    for (let scriptNum = 0; scriptNum < scriptIds.length; scriptNum++) {
+      const scriptId = scriptIds[scriptNum];
+      const topBlock = blocks[scriptId];
+      if (!topBlock) continue;
+
+      lines.push(`  SCRIPT #${scriptNum + 1}:  [→ ${scriptId}]`);
+
+      if (topBlock.opcode === "procedures_definition") {
+        const protoInput = topBlock.inputs?.["custom_block"];
+        const protoId = typeof protoInput?.[1] === "string" ? protoInput[1] : null;
+        const proto = protoId ? blocks[protoId] : null;
+        const warp = proto?.mutation?.warp;
+        const warpPrefix = warp === "true" || warp === true ? "warp " : "";
+        lines.push("    define " + warpPrefix + getProcSignature(blocks, topBlock) + ":");
+      } else {
+        const hatFmt = STATEMENT_FORMATTERS[topBlock.opcode];
+        if (hatFmt) lines.push("    " + hatFmt(topBlock, blocks));
+      }
+
+      if (topBlock.next) {
+        lines.push(...renderSequence(blocks, topBlock.next, "      "));
+      }
+      lines.push("");
+    }
+
+    return lines.join("\n");
+  }
+
+  function projectToComparePseudocode(project) {
+    const parts = ["// [x] = menu/dropdown/variable target/text   (x) = reporter/value   <x> = boolean", ""];
+    const sprites = (project.targets ?? []).filter((t) => !t.isStage);
+    const stage = (project.targets ?? []).find((t) => t.isStage);
+    for (const sprite of sprites) parts.push(targetToComparePseudocode(sprite, false));
+    if (stage) parts.push(targetToComparePseudocode(stage, true));
     return parts.join("\n");
   }
 }
