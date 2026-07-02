@@ -40,6 +40,15 @@ export default async function ({ addon, msg, console }) {
     return _astToBlocks;
   }
 
+  let _diffProjects = null;
+  async function getDiffProjects() {
+    if (!_diffProjects) {
+      const mod = await import("./project-differ.js");
+      _diffProjects = mod.diffProjects;
+    }
+    return _diffProjects;
+  }
+
   // Smooth-scrolling helpers — only needed when navigating to a block.
   let _scrollBlockIntoViewIfNeeded = null;
   let _initializeSmoothScrolling = null;
@@ -170,6 +179,20 @@ export default async function ({ addon, msg, console }) {
       const allOpcodes = topIds.flatMap((id) => collectOpcodes(blocks, id));
       return { name: target.name, isStage: !!target.isStage, allOpcodes };
     });
+  }
+
+  // Return a copy of the project JSON safe to store in IndexedDB.
+  // Variable values and list contents are stripped (neither is used by the differ,
+  // and list contents can be very large in some projects).
+  function strippedProjectForDiff(project) {
+    return {
+      ...project,
+      targets: (project.targets ?? []).map((target) => ({
+        ...target,
+        variables: Object.fromEntries(Object.entries(target.variables ?? {}).map(([id, [name]]) => [id, [name, 0]])),
+        lists: Object.fromEntries(Object.entries(target.lists ?? {}).map(([id, [name]]) => [id, [name, []]])),
+      })),
+    };
   }
 
   // Jaccard similarity on two opcode arrays treated as multisets.
@@ -575,7 +598,17 @@ export default async function ({ addon, msg, console }) {
         alert(msg("fetch-error", { error: String(e) }));
       }
     });
-    header.append(labelEl, analyzeBtn, copyPromptBtn);
+    const quickDiffBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-action-btn",
+      textContent: "🔍 Quick Diff",
+      title: tab.referenceProject
+        ? "Programmatic diff — no AI needed"
+        : "Re-save this episode (💾 Add episode to DB) to enable Quick Diff",
+    });
+    quickDiffBtn.disabled = !tab.referenceProject;
+    if (!tab.referenceProject) quickDiffBtn.style.opacity = "0.45";
+    quickDiffBtn.addEventListener("click", () => void handleQuickDiff(tab));
+    header.append(labelEl, analyzeBtn, quickDiffBtn, copyPromptBtn);
     compareContent.appendChild(header);
 
     const pre = Object.assign(document.createElement("pre"), {
@@ -585,12 +618,13 @@ export default async function ({ addon, msg, console }) {
     compareContent.appendChild(pre);
   }
 
-  function loadCompareReference(label, content) {
+  function loadCompareReference(label, content, referenceProject = null) {
     const compareTab = tabs.find((t) => t.type === "compare");
     if (!compareTab) return;
     compareTab.compareState = "reference";
     compareTab.referenceLabel = label;
     compareTab.referenceContent = content;
+    compareTab.referenceProject = referenceProject;
     switchTab(tabs.indexOf(compareTab));
     renderTabs();
   }
@@ -601,6 +635,7 @@ export default async function ({ addon, msg, console }) {
     compareTab.compareState = "chooser";
     compareTab.referenceLabel = "";
     compareTab.referenceContent = "";
+    compareTab.referenceProject = null;
     const idx = tabs.indexOf(compareTab);
     if (activeTabIndex === idx) {
       void renderCompareTab(compareTab);
@@ -668,7 +703,7 @@ export default async function ({ addon, msg, console }) {
       className: "sa-inspector-issue-go-btn",
       textContent: "Open",
     });
-    openBtn.addEventListener("click", () => loadCompareReference(ep.label, ep.pseudocode));
+    openBtn.addEventListener("click", () => loadCompareReference(ep.label, ep.pseudocode, ep.diffProject ?? null));
     const delBtn = Object.assign(document.createElement("button"), {
       className: "sa-inspector-issue-go-btn sa-inspector-match-del",
       title: "Remove from library",
@@ -706,6 +741,7 @@ export default async function ({ addon, msg, console }) {
           label,
           pseudocode: projectToComparePseudocode(project),
           fingerprint: fingerprintProject(project),
+          diffProject: strippedProjectForDiff(project),
           createdAt: Date.now(),
         });
         const compareTab = tabs.find((t) => t.type === "compare");
@@ -868,7 +904,9 @@ export default async function ({ addon, msg, console }) {
 
   function renderIssuesContent(tab) {
     issuesContent.innerHTML = "";
-    if (tab.issueState === "streaming") {
+    if (tab._isDiffTab) {
+      renderDiffContent(tab, issuesContent);
+    } else if (tab.issueState === "streaming") {
       const header = Object.assign(document.createElement("div"), {
         className: "sa-inspector-compare-ref-header",
         innerHTML: `<span class="sa-inspector-compare-ref-label sa-inspector-stream-waiting">⏳ Waiting for response…</span>`,
@@ -906,7 +944,7 @@ export default async function ({ addon, msg, console }) {
       parseBtn.addEventListener("click", doRender);
       pasteArea.addEventListener("paste", () => setTimeout(doRender, 0));
       issuesContent.append(pasteArea, parseBtn);
-    } else if (tab._parseScripts != null) {
+    } else if (tab._parseScripts !== null && tab._parseScripts !== undefined) {
       // ── AST tab: per-script cards with sub-tabs ──────────────────────────
       const scripts = tab._parseScripts;
       const warnings = tab._parseWarnings ?? [];
@@ -1478,6 +1516,455 @@ export default async function ({ addon, msg, console }) {
     }
   }
 
+  // ─── Quick Diff ────────────────────────────────────────────────────────────
+
+  async function handleQuickDiff(compareTab) {
+    let studentProject;
+    try {
+      studentProject = getCurrentProjectFromVM();
+    } catch (e) {
+      alert(msg("fetch-error", { error: String(e) }));
+      return;
+    }
+
+    const shortLabel = (compareTab.referenceLabel ?? "Diff").slice(0, 20);
+    const newTab = {
+      type: "issues",
+      label: `🔍 ${shortLabel}`,
+      issueState: "cards",
+      content: "",
+      cards: [],
+      _isDiffTab: true,
+      _diffResult: null,
+      _diffComputing: true,
+      _diffError: null,
+    };
+    tabs.push(newTab);
+    const tabIdx = tabs.length - 1;
+    switchTab(tabIdx);
+    renderTabs();
+
+    let diffFn;
+    try {
+      diffFn = await getDiffProjects();
+      newTab._diffResult = diffFn(compareTab.referenceProject, studentProject);
+    } catch (e) {
+      newTab._diffError = String(e);
+      console.error("[inspector:quick-diff]", e);
+    } finally {
+      newTab._diffComputing = false;
+    }
+
+    if (activeTabIndex === tabIdx) renderIssuesContent(newTab);
+  }
+
+  // ─── Diff result renderer ──────────────────────────────────────────────────
+
+  function renderDiffContent(tab, container) {
+    if (tab._diffComputing) {
+      container.appendChild(
+        Object.assign(document.createElement("p"), {
+          className: "sa-inspector-matches-empty",
+          textContent: "⏳ Computing diff…",
+        })
+      );
+      return;
+    }
+
+    if (tab._diffError) {
+      container.appendChild(
+        Object.assign(document.createElement("p"), {
+          className: "sa-inspector-matches-empty",
+          textContent: `❌ Diff failed: ${tab._diffError}`,
+        })
+      );
+      return;
+    }
+
+    const {
+      spriteMatches,
+      unmatchedRefTargets,
+      unmatchedStudentTargets,
+      nameMaps,
+      scriptMatches,
+      unmatchedRefScripts,
+      unmatchedStudentScripts,
+    } = tab._diffResult;
+
+    // ── Sprite matching summary ──────────────────────────────────────────────
+    renderDiffSectionHeading(container, "🗂️ Sprite Matching");
+    const spriteTable = Object.assign(document.createElement("div"), { className: "sa-inspector-diff-sprite-table" });
+
+    for (const { refTarget, studentTarget, confidence } of spriteMatches) {
+      const pct = Math.round(confidence * 100);
+      const confCls = pct > 60 ? "sa-diff-conf-good" : pct > 30 ? "sa-diff-conf-ok" : "sa-diff-conf-bad";
+      const row = Object.assign(document.createElement("div"), { className: "sa-inspector-diff-sprite-row" });
+      row.innerHTML = `<span class="sa-diff-name">${escHtml(refTarget.name)}</span><span class="sa-diff-arrow">${refTarget.name !== studentTarget.name ? " → " : " = "}</span><span class="sa-diff-name">${escHtml(studentTarget.name)}</span><span class="sa-inspector-match-pct ${confCls}">${pct}%</span>`;
+      spriteTable.appendChild(row);
+    }
+    for (const t of unmatchedRefTargets) {
+      const row = Object.assign(document.createElement("div"), {
+        className: "sa-inspector-diff-sprite-row sa-diff-missing",
+      });
+      row.innerHTML = `<span class="sa-diff-name">${escHtml(t.name)}</span><span class="sa-diff-arrow"> ✗ missing in student</span>`;
+      spriteTable.appendChild(row);
+    }
+    for (const t of unmatchedStudentTargets) {
+      const row = Object.assign(document.createElement("div"), {
+        className: "sa-inspector-diff-sprite-row sa-diff-extra",
+      });
+      row.innerHTML = `<span class="sa-diff-name">${escHtml(t.name)}</span><span class="sa-diff-arrow"> + extra in student</span>`;
+      spriteTable.appendChild(row);
+    }
+    container.appendChild(spriteTable);
+
+    // ── Name mapping ─────────────────────────────────────────────────────────
+    const renames = [];
+    for (const [spriteName, nm] of nameMaps) {
+      for (const [ref, m] of nm.variables) {
+        if (m.isRename) renames.push({ sprite: spriteName, type: "var", ref, stu: m.studentName, conf: m.confidence });
+      }
+      for (const [ref, m] of nm.lists) {
+        if (m.isRename) renames.push({ sprite: spriteName, type: "list", ref, stu: m.studentName, conf: m.confidence });
+      }
+      for (const [ref, m] of nm.broadcasts) {
+        if (m.isRename)
+          renames.push({ sprite: "(all)", type: "broadcast", ref, stu: m.studentName, conf: m.confidence });
+      }
+      for (const [ref, m] of nm.procedures) {
+        if (m.isRename)
+          renames.push({ sprite: spriteName, type: "proc", ref, stu: m.studentProccode, conf: m.confidence });
+      }
+    }
+    // Deduplicate broadcast renames (appear once per sprite but are global)
+    const seenBcRenames = new Set();
+    const uniqueRenames = renames.filter((r) => {
+      if (r.type !== "broadcast") return true;
+      const key = `${r.ref}→${r.stu}`;
+      if (seenBcRenames.has(key)) return false;
+      seenBcRenames.add(key);
+      return true;
+    });
+
+    if (uniqueRenames.length > 0) {
+      renderDiffSectionHeading(container, "🏷️ Inferred Renames");
+      container.appendChild(
+        Object.assign(document.createElement("p"), {
+          className: "sa-inspector-md-p",
+          textContent:
+            "Student uses different names for the same concept — these are not bugs if the logic is consistent:",
+        })
+      );
+      for (const r of uniqueRenames) {
+        const el = Object.assign(document.createElement("div"), { className: "sa-inspector-diff-rename-row" });
+        el.innerHTML = `<span class="sa-diff-type-tag">${escHtml(r.type)}</span> <span class="sa-diff-name">${escHtml(r.ref)}</span> <span class="sa-diff-arrow">→</span> <span class="sa-diff-name">${escHtml(r.stu)}</span> <span class="sa-inspector-match-pct sa-diff-conf-${r.conf > 0.7 ? "good" : "ok"}">${Math.round(r.conf * 100)}%</span> <span class="sa-diff-sprite-hint">${r.sprite !== "(all)" ? `(${escHtml(r.sprite)})` : ""}</span>`;
+        container.appendChild(el);
+      }
+    }
+
+    // ── Script differences ────────────────────────────────────────────────────
+    renderDiffSectionHeading(container, "📜 Script Differences");
+
+    // Group matched scripts by ref sprite name
+    const seenTargetNames = [];
+    for (const { refTarget } of spriteMatches) {
+      if (!seenTargetNames.includes(refTarget.name)) seenTargetNames.push(refTarget.name);
+    }
+    for (const { target } of unmatchedRefScripts) {
+      if (!seenTargetNames.includes(target.name)) seenTargetNames.push(target.name);
+    }
+
+    for (const targetName of seenTargetNames) {
+      const targetMatches = scriptMatches.filter((m) => m.refTarget.name === targetName);
+      const targetUnmatched = unmatchedRefScripts.filter((u) => u.target.name === targetName);
+      if (targetMatches.length === 0 && targetUnmatched.length === 0) continue;
+
+      // Find the actual ref target for block access
+      const refTarget =
+        spriteMatches.find((m) => m.refTarget.name === targetName)?.refTarget ??
+        unmatchedRefScripts.find((u) => u.target.name === targetName)?.target;
+
+      container.appendChild(
+        Object.assign(document.createElement("div"), {
+          className: "sa-inspector-diff-sprite-label",
+          textContent: `══ ${targetName} ══`,
+        })
+      );
+
+      for (const match of targetMatches) {
+        const refBlocks = match.refTarget.blocks ?? {};
+        const hatBlock = refBlocks[match.refScriptId];
+        const hatText = getHatText(hatBlock, refBlocks);
+        const pct = Math.round(match.confidence * 100);
+        const ops = match.diffOps ?? [];
+        let changed = 0,
+          inserted = 0,
+          deleted = 0;
+        for (const op of ops) {
+          if (op.type === "change") changed++;
+          else if (op.type === "insert") inserted++;
+          else if (op.type === "delete") deleted++;
+        }
+        const hasChanges = changed > 0 || inserted > 0 || deleted > 0;
+        const confCls = pct > 75 ? "sa-diff-conf-good" : pct > 40 ? "sa-diff-conf-ok" : "sa-diff-conf-bad";
+
+        const card = Object.assign(document.createElement("div"), { className: "sa-inspector-diff-script-card" });
+        const cardHdr = Object.assign(document.createElement("div"), {
+          className: `sa-inspector-diff-script-header${hasChanges ? "" : " sa-diff-clean"}`,
+        });
+        const hatSpan = Object.assign(document.createElement("span"), {
+          className: "sa-diff-script-hat",
+          textContent: hatText,
+        });
+        const pctSpan = Object.assign(document.createElement("span"), {
+          className: `sa-inspector-match-pct ${confCls}`,
+          textContent: `${pct}%`,
+        });
+        cardHdr.append(hatSpan, pctSpan);
+        if (changed > 0) cardHdr.appendChild(makeDiffBadge(`${changed} changed`, "sa-diff-changed"));
+        if (inserted > 0) cardHdr.appendChild(makeDiffBadge(`+${inserted}`, "sa-diff-inserted"));
+        if (deleted > 0) cardHdr.appendChild(makeDiffBadge(`−${deleted}`, "sa-diff-deleted"));
+
+        const goBtn = Object.assign(document.createElement("button"), {
+          className: "sa-inspector-issue-go-btn",
+          textContent: "🎯 Go",
+        });
+        goBtn.addEventListener("click", async () => {
+          await handleGotoBlock(`${match.studentTarget.name} | ${hatText} | [→ ${match.studentScriptId}]`, card);
+          const changedIds = ops
+            .filter((op) => (op.type === "change" || op.type === "insert") && op.studentBlockId)
+            .map((op) => op.studentBlockId);
+          if (changedIds.length > 0) void highlightDiffBlocks(changedIds);
+        });
+        cardHdr.appendChild(goBtn);
+        card.appendChild(cardHdr);
+
+        if (hasChanges) {
+          const refBlocks = match.refTarget.blocks ?? {};
+          const stuBlocks = match.studentTarget.blocks ?? {};
+          const bodyEl = Object.assign(document.createElement("div"), { className: "sa-inspector-diff-body" });
+          let lineCount = 0;
+          const cap = 30;
+          const nonMatchOps = ops.filter((op) => op.type !== "match");
+          for (const op of nonMatchOps) {
+            if (lineCount >= cap) {
+              bodyEl.appendChild(
+                Object.assign(document.createElement("div"), {
+                  className: "sa-diff-line sa-diff-line-more",
+                  textContent: `… (${nonMatchOps.length - cap} more)`,
+                })
+              );
+              break;
+            }
+            if (op.type === "change") {
+              const rb = refBlocks[op.refBlockId];
+              const sb = stuBlocks[op.studentBlockId];
+              if (rb && sb) {
+                const refLine = formatBlockLine(rb, refBlocks);
+                const stuLine = formatBlockLine(sb, stuBlocks);
+                // If the rendered pseudocode is identical the change is a pure rename
+                // already captured in the NameMap — skip it to avoid noisy output.
+                if (refLine === stuLine) continue;
+                bodyEl.appendChild(makeDiffBodyLine("delete", `− ${refLine}`, null, null));
+                lineCount++;
+                bodyEl.appendChild(
+                  makeDiffBodyLine("insert", `+ ${stuLine}`, op.studentBlockId, match.studentTarget.name)
+                );
+                lineCount++;
+              }
+            } else if (op.type === "insert") {
+              const b = stuBlocks[op.studentBlockId];
+              bodyEl.appendChild(
+                makeDiffBodyLine(
+                  "insert",
+                  `+ ${b ? formatBlockLine(b, stuBlocks) : op.opcode}`,
+                  op.studentBlockId,
+                  match.studentTarget.name
+                )
+              );
+              lineCount++;
+            } else if (op.type === "delete") {
+              const b = refBlocks[op.refBlockId];
+              bodyEl.appendChild(
+                makeDiffBodyLine("delete", `− ${b ? formatBlockLine(b, refBlocks) : op.opcode}`, null, null)
+              );
+              lineCount++;
+            }
+          }
+          if (lineCount > 0) card.appendChild(bodyEl);
+        }
+        container.appendChild(card);
+      }
+
+      for (const { scriptId } of targetUnmatched) {
+        const hatBlock = (refTarget?.blocks ?? {})[scriptId];
+        const hatText = getHatText(hatBlock, refTarget?.blocks ?? {});
+        const card = Object.assign(document.createElement("div"), {
+          className: "sa-inspector-diff-script-card sa-diff-missing-script",
+        });
+        const cardHdr = Object.assign(document.createElement("div"), {
+          className: "sa-inspector-diff-script-header",
+        });
+        cardHdr.append(
+          makeDiffBadge("✗ missing", "sa-diff-deleted"),
+          Object.assign(document.createElement("span"), { className: "sa-diff-script-hat", textContent: hatText })
+        );
+        card.appendChild(cardHdr);
+        container.appendChild(card);
+      }
+    }
+
+    // ── Extra scripts in student ──────────────────────────────────────────────
+    if (unmatchedStudentScripts.length > 0) {
+      renderDiffSectionHeading(container, "➕ Extra Scripts (student only)");
+      const byTarget = new Map();
+      for (const { target, scriptId } of unmatchedStudentScripts) {
+        if (!byTarget.has(target.name)) byTarget.set(target.name, { target, ids: [] });
+        byTarget.get(target.name).ids.push(scriptId);
+      }
+      for (const [targetName, { target, ids }] of byTarget) {
+        container.appendChild(
+          Object.assign(document.createElement("div"), {
+            className: "sa-inspector-diff-sprite-label",
+            textContent: targetName,
+          })
+        );
+        for (const scriptId of ids) {
+          const hatBlock = (target.blocks ?? {})[scriptId];
+          const hatText = getHatText(hatBlock, target.blocks ?? {});
+          const card = Object.assign(document.createElement("div"), {
+            className: "sa-inspector-diff-script-card sa-diff-extra-script",
+          });
+          const cardHdr = Object.assign(document.createElement("div"), {
+            className: "sa-inspector-diff-script-header",
+          });
+          cardHdr.append(
+            makeDiffBadge("+ extra", "sa-diff-inserted"),
+            Object.assign(document.createElement("span"), { className: "sa-diff-script-hat", textContent: hatText })
+          );
+          const goBtn = Object.assign(document.createElement("button"), {
+            className: "sa-inspector-issue-go-btn",
+            textContent: "🎯 Go",
+          });
+          goBtn.addEventListener("click", () => {
+            void handleGotoBlock(`${targetName} | ${hatText} | [→ ${scriptId}]`, card);
+          });
+          cardHdr.appendChild(goBtn);
+          card.appendChild(cardHdr);
+          container.appendChild(card);
+        }
+      }
+    }
+  }
+
+  function renderDiffSectionHeading(container, title) {
+    container.appendChild(
+      Object.assign(document.createElement("div"), { className: "sa-inspector-issue-section", textContent: title })
+    );
+  }
+
+  function makeDiffBadge(text, cls) {
+    return Object.assign(document.createElement("span"), { className: `sa-diff-badge ${cls}`, textContent: text });
+  }
+
+  // Create a single diff body line with optional per-block 🎯 Go button.
+  function makeDiffBodyLine(diffType, text, blockId, spriteName) {
+    const el = Object.assign(document.createElement("div"), { className: `sa-diff-line sa-diff-line-${diffType}` });
+    el.appendChild(
+      Object.assign(document.createElement("span"), { className: "sa-diff-line-text", textContent: text })
+    );
+    if (blockId && spriteName) {
+      const btn = Object.assign(document.createElement("button"), {
+        className: "sa-diff-line-go",
+        title: "Go to this block",
+        textContent: "\uD83C\uDFAF",
+      });
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await handleGotoBlock(`${spriteName} |  | [\u2192 ${blockId}]`, null);
+        void highlightDiffBlocks([blockId]);
+      });
+      el.appendChild(btn);
+    }
+    return el;
+  }
+
+  // Render a single block as a pseudocode line (header only for C-blocks).
+  function formatBlockLine(block, blocks) {
+    if (block.opcode === "procedures_definition") return "define " + getProcSignature(blocks, block);
+    const cDef = C_BLOCKS[block.opcode];
+    if (cDef) return cDef.header(block, blocks);
+    const fmt = STATEMENT_FORMATTERS[block.opcode];
+    return fmt ? fmt(block, blocks) : block.opcode;
+  }
+
+  // Highlight block IDs in the current workspace using an SVG outline clone
+  // (same technique as the find-bar carousel). Outlines persist until cleared.
+  // The _diffOutlines array holds {path, outline} for cleanup.
+  const _diffOutlines = [];
+
+  function clearDiffHighlights() {
+    for (const { outline } of _diffOutlines) outline.remove();
+    _diffOutlines.length = 0;
+    if (_diffHighlightCleanup) {
+      _diffHighlightCleanup();
+      _diffHighlightCleanup = null;
+    }
+  }
+
+  function addDiffOutline(block) {
+    const path = block?.pathObject?.svgPath ?? block?.svgPath_ ?? null;
+    if (!path) {
+      console.warn("[inspector:diff-outline] no SVG path for block", block?.id);
+      return;
+    }
+    if (!path.parentNode) {
+      console.warn("[inspector:diff-outline] path has no parentNode for block", block?.id);
+      return;
+    }
+    const outline = path.cloneNode(true);
+    outline.style.fill = "none";
+    outline.style.stroke = "rgba(0,0,0,0.7)";
+    outline.style.strokeWidth = "3";
+    outline.style.pointerEvents = "none";
+    outline.setAttribute("data-sa-diff-outline", "true");
+    path.parentNode.appendChild(outline);
+    _diffOutlines.push({ path, outline });
+    console.log("[inspector:diff-outline] outlined block", block.id.slice(0, 8), block.type);
+  }
+
+  // Highlight the given student block IDs amber in the workspace for 5 seconds.
+  let _diffHighlightCleanup = null;
+  async function highlightDiffBlocks(studentBlockIds) {
+    clearDiffHighlights();
+    await ensureBlocklyReady();
+    const workspace = addon.tab.traps.getWorkspace();
+    if (!workspace) {
+      console.warn("[inspector:diff-highlight] no workspace");
+      return;
+    }
+    console.log("[inspector:diff-highlight] highlighting", studentBlockIds.length, "blocks");
+    for (const id of studentBlockIds) {
+      const block = workspace.getBlockById(id);
+      if (!block) {
+        console.warn("[inspector:diff-highlight] block not found in workspace:", id.slice(0, 12));
+        continue;
+      }
+      addDiffOutline(block);
+    }
+    // Auto-clear outlines after 8 seconds
+    const timer = setTimeout(clearDiffHighlights, 8000);
+    _diffHighlightCleanup = () => clearTimeout(timer);
+  }
+
+  // Return a human-readable description of a hat/top-level block.
+  function getHatText(hatBlock, blocks) {
+    if (!hatBlock) return "(unknown hat)";
+    if (hatBlock.opcode === "procedures_definition") return "define " + getProcSignature(blocks, hatBlock);
+    const fmt = STATEMENT_FORMATTERS[hatBlock.opcode];
+    return fmt ? fmt(hatBlock, blocks) : hatBlock.opcode;
+  }
+
   // ─── Toolbar click ─────────────────────────────────────────────────────────
 
   async function handleToolbarClick() {
@@ -1528,7 +2015,7 @@ export default async function ({ addon, msg, console }) {
     const projectId = input.trim();
     try {
       const project = await fetchProjectById(projectId);
-      loadCompareReference(`#${projectId}`, projectToComparePseudocode(project));
+      loadCompareReference(`#${projectId}`, projectToComparePseudocode(project), project);
     } catch (e) {
       alert(msg("fetch-error", { error: String(e) }));
     }
@@ -1885,7 +2372,7 @@ Looks / sound / motion — use exact block names:
       try {
         const project = await readSb3File(file);
         const label = file.name.replace(/\.sb[23]$/i, "");
-        loadCompareReference(label, projectToComparePseudocode(project));
+        loadCompareReference(label, projectToComparePseudocode(project), project);
       } catch (e) {
         alert(msg("fetch-error", { error: String(e) }));
       }

@@ -761,6 +761,168 @@
   background: #3b1f2e !important;
 }
 
+/* ── Quick Diff rendering ───────────────────────────────────────────────────── */
+
+.sa-inspector-diff-sprite-table {
+  padding: 0.4rem 0.75rem;
+}
+
+.sa-inspector-diff-sprite-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: #cdd6f4;
+  padding: 0.1rem 0;
+}
+
+.sa-inspector-diff-sprite-row.sa-diff-missing .sa-diff-arrow {
+  color: #f38ba8;
+}
+
+.sa-inspector-diff-sprite-row.sa-diff-extra .sa-diff-arrow {
+  color: #a6e3a1;
+}
+
+.sa-diff-name {
+  color: #cdd6f4;
+}
+
+.sa-diff-arrow {
+  color: #6c7086;
+  white-space: nowrap;
+}
+
+.sa-diff-conf-good { color: #a6e3a1; }
+.sa-diff-conf-ok   { color: #f9e2af; }
+.sa-diff-conf-bad  { color: #f38ba8; }
+
+/* Rename rows */
+.sa-inspector-diff-rename-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+.sa-diff-type-tag {
+  background: #313244;
+  border-radius: 3px;
+  color: #cba6f7;
+  font-family: monospace;
+  font-size: 0.68rem;
+  padding: 0.05em 0.4em;
+}
+
+.sa-diff-sprite-hint {
+  color: #6c7086;
+  font-size: 0.7rem;
+}
+
+/* Sprite-label headers inside script diff */
+.sa-inspector-diff-sprite-label {
+  color: #89b4fa;
+  font-family: monospace;
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 0.4rem 0.75rem 0.1rem;
+}
+
+/* Script comparison cards */
+.sa-inspector-diff-script-card {
+  background: #27273a;
+  border: 1px solid #45475a;
+  border-radius: 5px;
+  margin: 0.25rem 0.5rem;
+  overflow: hidden;
+}
+
+.sa-inspector-diff-script-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  background: #313244;
+}
+
+.sa-inspector-diff-script-header.sa-diff-clean {
+  background: #1e2630;
+  border-left: 3px solid #a6e3a1;
+}
+
+.sa-diff-missing-script .sa-inspector-diff-script-header {
+  background: #2a1f2e;
+  border-left: 3px solid #f38ba8;
+}
+
+.sa-diff-extra-script .sa-inspector-diff-script-header {
+  background: #1a2a1e;
+  border-left: 3px solid #a6e3a1;
+}
+
+.sa-diff-script-hat {
+  flex: 1;
+  color: #cdd6f4;
+  font-family: monospace;
+  font-size: 0.73rem;
+}
+
+/* Small status badges */
+.sa-diff-badge {
+  border-radius: 3px;
+  font-size: 0.68rem;
+  padding: 0.05em 0.45em;
+  white-space: nowrap;
+}
+
+.sa-diff-changed  { background: #3a2e1a; color: #f9e2af; }
+.sa-diff-inserted { background: #1a2a1e; color: #a6e3a1; }
+.sa-diff-deleted  { background: #2a1a1e; color: #f38ba8; }
+
+/* Diff body — coloured line-by-line pseudocode */
+.sa-inspector-diff-body {
+  border-top: 1px solid #313244;
+  font-family: monospace;
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.sa-diff-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.1rem 0.6rem;
+}
+
+.sa-diff-line-insert { background: #162016; color: #a6e3a1; }
+.sa-diff-line-delete { background: #201216; color: #f38ba8; }
+.sa-diff-line-more   { background: #1e1e2e; color: #6c7086; padding: 0.15rem 0.6rem; }
+
+.sa-diff-line-text {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.sa-diff-line-go {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.75rem;
+  opacity: 0.45;
+  padding: 0;
+  line-height: 1;
+}
+
+.sa-diff-line:hover .sa-diff-line-go {
+  opacity: 1;
+}
+
 .sa-inspector-note-bar {
   flex-shrink: 0;
   margin: 0;
