@@ -49,6 +49,24 @@ export default async function ({ addon, msg, console }) {
     return _diffProjects;
   }
 
+  let _normalizeNodeForDisplay = null;
+  async function getNormalizeNodeForDisplay() {
+    if (!_normalizeNodeForDisplay) {
+      const mod = await import("./project-differ.js");
+      _normalizeNodeForDisplay = mod.normalizeNodeForDisplay;
+    }
+    return _normalizeNodeForDisplay;
+  }
+
+  let _blockToIR = null;
+  async function getBlockToIR() {
+    if (!_blockToIR) {
+      const mod = await import("./block-ir.js");
+      _blockToIR = mod.blockToIR;
+    }
+    return _blockToIR;
+  }
+
   // Smooth-scrolling helpers — only needed when navigating to a block.
   let _scrollBlockIntoViewIfNeeded = null;
   let _initializeSmoothScrolling = null;
@@ -270,27 +288,7 @@ export default async function ({ addon, msg, console }) {
     toolbar.append(tabBar, actions);
 
     // Drag the panel by the toolbar
-    toolbar.addEventListener("mousedown", (e) => {
-      if (e.target.closest("button")) return;
-      e.preventDefault();
-      const rect = panel.getBoundingClientRect();
-      // Switch from right-anchored to left-anchored so dragging works consistently
-      panel.style.right = "";
-      panel.style.left = rect.left + "px";
-      panel.style.top = rect.top + "px";
-      const ox = e.clientX - rect.left;
-      const oy = e.clientY - rect.top;
-      const onMove = (me) => {
-        panel.style.left = Math.max(0, Math.min(me.clientX - ox, window.innerWidth - 60)) + "px";
-        panel.style.top = Math.max(0, Math.min(me.clientY - oy, window.innerHeight - 40)) + "px";
-      };
-      const onUp = () => {
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-      };
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-    });
+    makeDraggable(toolbar, panel);
 
     // Body: three content areas, one visible at a time
     const body = Object.assign(document.createElement("div"), { className: "sa-inspector-body" });
@@ -308,13 +306,13 @@ export default async function ({ addon, msg, console }) {
       className: "sa-inspector-action-btn",
       textContent: hasApiToken() ? "🔍 Ask AI" : "🔍 Ask ChatGPT",
     });
-    const triggerBugPrompt = () => {
+    const triggerBugPrompt = async () => {
       const desc = bugInput.value.trim();
       if (!desc) return;
       let promptText;
       try {
         const project = getCurrentProjectFromVM();
-        promptText = buildAskPrompt(projectToPseudocode(project), desc);
+        promptText = buildAskPrompt(await projectToPseudocode(project), desc);
       } catch (e) {
         alert(msg("fetch-error", { error: String(e) }));
         return;
@@ -330,9 +328,9 @@ export default async function ({ addon, msg, console }) {
         void navigator.clipboard.writeText(promptText);
       }
     };
-    bugBtn.addEventListener("click", triggerBugPrompt);
+    bugBtn.addEventListener("click", () => void triggerBugPrompt());
     bugInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") triggerBugPrompt();
+      if (e.key === "Enter") void triggerBugPrompt();
     });
 
     // Parse test button — runs the pseudocode parser and shows the AST in an Issues tab
@@ -465,7 +463,97 @@ export default async function ({ addon, msg, console }) {
 
     body.append(currentWrap, compareContent, issuesContent, overlayCopyBtn, overlayInjectBtn);
     panel.append(toolbar, body);
+    // Resize handles (native CSS `resize` only offers a bottom-right corner grip
+    // and can't do the left edge at all). The right edge/corners are deliberately
+    // omitted — that's where the content scrollbar lives, and a resize handle
+    // there makes the scrollbar hard to grab.
+    for (const dir of ["n", "s", "w", "nw", "sw"]) {
+      panel.appendChild(makeResizeHandle(dir, panel));
+    }
     document.body.appendChild(panel);
+  }
+
+  const MIN_PANEL_WIDTH = 320;
+  const MIN_PANEL_HEIGHT = 200;
+
+  // Make `targetEl` draggable by mousedown-dragging `handleEl` (e.g. a toolbar).
+  // Switches `targetEl` from right-anchored to left-anchored on the first drag
+  // so subsequent moves are simple absolute positioning.
+  function makeDraggable(handleEl, targetEl) {
+    handleEl.addEventListener("mousedown", (e) => {
+      if (e.target.closest("button")) return;
+      e.preventDefault();
+      const rect = targetEl.getBoundingClientRect();
+      targetEl.style.right = "";
+      targetEl.style.left = rect.left + "px";
+      targetEl.style.top = rect.top + "px";
+      const ox = e.clientX - rect.left;
+      const oy = e.clientY - rect.top;
+      const onMove = (me) => {
+        targetEl.style.left = Math.max(0, Math.min(me.clientX - ox, window.innerWidth - 60)) + "px";
+        targetEl.style.top = Math.max(0, Math.min(me.clientY - oy, window.innerHeight - 40)) + "px";
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  }
+
+  // Build a drag handle for one edge/corner of `targetEl`. `dir` is a subset of
+  // "nsew" indicating which edges move: "w"/"e" adjust width (and left, for "w"),
+  // "n"/"s" adjust height (and top, for "n"); corners combine both.
+  function makeResizeHandle(dir, targetEl) {
+    const handle = Object.assign(document.createElement("div"), {
+      className: `sa-inspector-resize-handle sa-inspector-resize-${dir}`,
+    });
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = targetEl.getBoundingClientRect();
+      // Normalise to explicit left/top/width/height so every edge resizes
+      // predictably, regardless of whether the element is still right-anchored
+      // via CSS `right` (see makeDraggable, which does the same normalisation).
+      targetEl.style.right = "";
+      targetEl.style.left = rect.left + "px";
+      targetEl.style.top = rect.top + "px";
+      targetEl.style.width = rect.width + "px";
+      targetEl.style.height = rect.height + "px";
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startLeft = rect.left;
+      const startTop = rect.top;
+      const startWidth = rect.width;
+      const startHeight = rect.height;
+
+      const onMove = (me) => {
+        const dx = me.clientX - startX;
+        const dy = me.clientY - startY;
+        if (dir.includes("w")) {
+          const newWidth = Math.max(MIN_PANEL_WIDTH, startWidth - dx);
+          targetEl.style.left = startLeft + (startWidth - newWidth) + "px";
+          targetEl.style.width = newWidth + "px";
+        } else if (dir.includes("e")) {
+          targetEl.style.width = Math.max(MIN_PANEL_WIDTH, startWidth + dx) + "px";
+        }
+        if (dir.includes("n")) {
+          const newHeight = Math.max(MIN_PANEL_HEIGHT, startHeight - dy);
+          targetEl.style.top = startTop + (startHeight - newHeight) + "px";
+          targetEl.style.height = newHeight + "px";
+        } else if (dir.includes("s")) {
+          targetEl.style.height = Math.max(MIN_PANEL_HEIGHT, startHeight + dy) + "px";
+        }
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+    return handle;
   }
 
   function applyTab(index) {
@@ -481,7 +569,7 @@ export default async function ({ addon, msg, console }) {
     overlayInjectBtn.style.display = isIssues && tab._parseScripts?.length > 0 ? "" : "none";
     if (isCurrent) textContent.textContent = tab.content ?? "";
     if (isCompare) void renderCompareTab(tab);
-    if (isIssues) renderIssuesContent(tab);
+    if (isIssues) void renderIssuesContent(tab);
   }
 
   // ─── Compare tab rendering ────────────────────────────────────────────────
@@ -577,16 +665,16 @@ export default async function ({ addon, msg, console }) {
       className: "sa-inspector-action-btn",
       textContent: hasApiToken() ? "📊 Analyse with AI" : "📊 Copy & open issues tab",
     });
-    analyzeBtn.addEventListener("click", () => handleCopyAndAnalyze(tab));
+    analyzeBtn.addEventListener("click", () => void handleCopyAndAnalyze(tab));
     const copyPromptBtn = Object.assign(document.createElement("button"), {
       className: "sa-inspector-action-btn",
       title: "Copy comparison prompt to clipboard (for pasting into any LLM)",
       textContent: "📋",
     });
-    copyPromptBtn.addEventListener("click", () => {
+    copyPromptBtn.addEventListener("click", async () => {
       try {
         const studentProject = getCurrentProjectFromVM();
-        const studentCode = projectToComparePseudocode(studentProject);
+        const studentCode = await projectToComparePseudocode(studentProject);
         const promptText = buildComparisonPrompt(studentCode, tab.referenceContent, tab.referenceLabel);
         void navigator.clipboard.writeText(promptText).then(() => {
           copyPromptBtn.textContent = "✓";
@@ -645,11 +733,11 @@ export default async function ({ addon, msg, console }) {
     renderTabs();
   }
 
-  function handleCopyAndAnalyze(tab) {
+  async function handleCopyAndAnalyze(tab) {
     let promptText;
     try {
       const studentProject = getCurrentProjectFromVM();
-      const studentCode = projectToComparePseudocode(studentProject);
+      const studentCode = await projectToComparePseudocode(studentProject);
       promptText = buildComparisonPrompt(studentCode, tab.referenceContent, tab.referenceLabel);
     } catch (e) {
       alert(msg("fetch-error", { error: String(e) }));
@@ -739,7 +827,7 @@ export default async function ({ addon, msg, console }) {
           id: crypto.randomUUID(),
           tutorial,
           label,
-          pseudocode: projectToComparePseudocode(project),
+          pseudocode: await projectToComparePseudocode(project),
           fingerprint: fingerprintProject(project),
           diffProject: strippedProjectForDiff(project),
           createdAt: Date.now(),
@@ -902,10 +990,10 @@ export default async function ({ addon, msg, console }) {
 
   // ─── Issues tab rendering ─────────────────────────────────────────────────
 
-  function renderIssuesContent(tab) {
+  async function renderIssuesContent(tab) {
     issuesContent.innerHTML = "";
     if (tab._isDiffTab) {
-      renderDiffContent(tab, issuesContent);
+      await renderDiffContent(tab, issuesContent);
     } else if (tab.issueState === "streaming") {
       const header = Object.assign(document.createElement("div"), {
         className: "sa-inspector-compare-ref-header",
@@ -939,7 +1027,7 @@ export default async function ({ addon, msg, console }) {
         if (!text) return;
         tab.issueState = "cards";
         tab.content = text;
-        renderIssuesContent(tab);
+        void renderIssuesContent(tab);
       };
       parseBtn.addEventListener("click", doRender);
       pasteArea.addEventListener("paste", () => setTimeout(doRender, 0));
@@ -1555,12 +1643,12 @@ export default async function ({ addon, msg, console }) {
       newTab._diffComputing = false;
     }
 
-    if (activeTabIndex === tabIdx) renderIssuesContent(newTab);
+    if (activeTabIndex === tabIdx) void renderIssuesContent(newTab);
   }
 
   // ─── Diff result renderer ──────────────────────────────────────────────────
 
-  function renderDiffContent(tab, container) {
+  async function renderDiffContent(tab, container) {
     if (tab._diffComputing) {
       container.appendChild(
         Object.assign(document.createElement("p"), {
@@ -1590,17 +1678,24 @@ export default async function ({ addon, msg, console }) {
       unmatchedRefScripts,
       unmatchedStudentScripts,
     } = tab._diffResult;
+    const blockToIR = await getBlockToIR();
+    const normalizeNodeForDisplay = await getNormalizeNodeForDisplay();
 
     // ── Sprite matching summary ──────────────────────────────────────────────
     renderDiffSectionHeading(container, "🗂️ Sprite Matching");
     const spriteTable = Object.assign(document.createElement("div"), { className: "sa-inspector-diff-sprite-table" });
+    // High-confidence matches (≥80%) are almost always correct and mostly just
+    // clutter — collapse them behind a toggle by default so missing/extra
+    // sprites and anything uncertain stay front and centre.
+    const confidentSpriteRows = [];
 
     for (const { refTarget, studentTarget, confidence } of spriteMatches) {
       const pct = Math.round(confidence * 100);
       const confCls = pct > 60 ? "sa-diff-conf-good" : pct > 30 ? "sa-diff-conf-ok" : "sa-diff-conf-bad";
       const row = Object.assign(document.createElement("div"), { className: "sa-inspector-diff-sprite-row" });
       row.innerHTML = `<span class="sa-diff-name">${escHtml(refTarget.name)}</span><span class="sa-diff-arrow">${refTarget.name !== studentTarget.name ? " → " : " = "}</span><span class="sa-diff-name">${escHtml(studentTarget.name)}</span><span class="sa-inspector-match-pct ${confCls}">${pct}%</span>`;
-      spriteTable.appendChild(row);
+      if (pct >= 80) confidentSpriteRows.push(row);
+      else spriteTable.appendChild(row);
     }
     for (const t of unmatchedRefTargets) {
       const row = Object.assign(document.createElement("div"), {
@@ -1617,6 +1712,15 @@ export default async function ({ addon, msg, console }) {
       spriteTable.appendChild(row);
     }
     container.appendChild(spriteTable);
+    if (confidentSpriteRows.length > 0) {
+      container.appendChild(
+        makeCollapsibleRows(
+          confidentSpriteRows,
+          `${confidentSpriteRows.length} confidently matched sprite${confidentSpriteRows.length === 1 ? "" : "s"} (80%+)`,
+          "sa-inspector-diff-sprite-table"
+        )
+      );
+    }
 
     // ── Name mapping ─────────────────────────────────────────────────────────
     const renames = [];
@@ -1655,10 +1759,22 @@ export default async function ({ addon, msg, console }) {
             "Student uses different names for the same concept — these are not bugs if the logic is consistent:",
         })
       );
+      // Same collapse-by-default treatment as sprite matches: a rename found
+      // with ≥80% confidence is almost certainly correct.
+      const confidentRenameRows = [];
       for (const r of uniqueRenames) {
         const el = Object.assign(document.createElement("div"), { className: "sa-inspector-diff-rename-row" });
         el.innerHTML = `<span class="sa-diff-type-tag">${escHtml(r.type)}</span> <span class="sa-diff-name">${escHtml(r.ref)}</span> <span class="sa-diff-arrow">→</span> <span class="sa-diff-name">${escHtml(r.stu)}</span> <span class="sa-inspector-match-pct sa-diff-conf-${r.conf > 0.7 ? "good" : "ok"}">${Math.round(r.conf * 100)}%</span> <span class="sa-diff-sprite-hint">${r.sprite !== "(all)" ? `(${escHtml(r.sprite)})` : ""}</span>`;
-        container.appendChild(el);
+        if (r.conf >= 0.8) confidentRenameRows.push(el);
+        else container.appendChild(el);
+      }
+      if (confidentRenameRows.length > 0) {
+        container.appendChild(
+          makeCollapsibleRows(
+            confidentRenameRows,
+            `${confidentRenameRows.length} confident rename${confidentRenameRows.length === 1 ? "" : "s"} (80%+)`
+          )
+        );
       }
     }
 
@@ -1674,6 +1790,7 @@ export default async function ({ addon, msg, console }) {
       if (!seenTargetNames.includes(target.name)) seenTargetNames.push(target.name);
     }
 
+    let hiddenCleanSprites = 0;
     for (const targetName of seenTargetNames) {
       const targetMatches = scriptMatches.filter((m) => m.refTarget.name === targetName);
       const targetUnmatched = unmatchedRefScripts.filter((u) => u.target.name === targetName);
@@ -1684,28 +1801,53 @@ export default async function ({ addon, msg, console }) {
         spriteMatches.find((m) => m.refTarget.name === targetName)?.refTarget ??
         unmatchedRefScripts.find((u) => u.target.name === targetName)?.target;
 
-      container.appendChild(
+      // Build this sprite's whole section in a detached fragment first, so it
+      // can be skipped entirely if nothing about it differs — see
+      // hiddenCleanSprites below.
+      const spriteFrag = document.createDocumentFragment();
+      let spriteHasChanges = targetUnmatched.length > 0;
+      // Scripts that matched with no field/statement differences at all (only
+      // their match confidence is < 100%) — hidden the same way whole clean
+      // sprites are, since there's nothing to review.
+      let cleanScriptCount = 0;
+
+      spriteFrag.appendChild(
         Object.assign(document.createElement("div"), {
           className: "sa-inspector-diff-sprite-label",
-          textContent: `══ ${targetName} ══`,
+          textContent: `🐱 ${targetName}`,
         })
       );
 
       for (const match of targetMatches) {
         const refBlocks = match.refTarget.blocks ?? {};
-        const hatBlock = refBlocks[match.refScriptId];
-        const hatText = getHatText(hatBlock, refBlocks);
+        const stuBlocks = match.studentTarget.blocks ?? {};
+        // The ref side is rendered through the student's naming (renamed
+        // variables/lists/broadcasts/sprites/procedures) so that comparing the
+        // two rendered lines only surfaces genuine differences, not renames the
+        // diff engine already recognises as equivalent (see normalizeNodeForDisplay).
+        const spriteNameMap = nameMaps.get(match.refTarget.name) ?? null;
+        const hatNode = normalizeNodeForDisplay(blockToIR(match.refScriptId, refBlocks), spriteNameMap);
+        const hatText = getHatText(hatNode);
         const pct = Math.round(match.confidence * 100);
         const ops = match.diffOps ?? [];
         let changed = 0,
           inserted = 0,
-          deleted = 0;
+          deleted = 0,
+          moved = 0,
+          swapped = 0;
         for (const op of ops) {
-          if (op.type === "change") changed++;
-          else if (op.type === "insert") inserted++;
+          if (op.swapped) {
+            // Count each swapped pair once (see swappedPrimary in project-differ.js).
+            if (op.swappedPrimary) swapped++;
+          } else if (op.type === "change") changed++;
+          else if (op.moved) {
+            // Count each moved delete/insert pair once (on the insert side).
+            if (op.type === "insert") moved++;
+          } else if (op.type === "insert") inserted++;
           else if (op.type === "delete") deleted++;
         }
-        const hasChanges = changed > 0 || inserted > 0 || deleted > 0;
+        const hasChanges = changed > 0 || inserted > 0 || deleted > 0 || moved > 0 || swapped > 0;
+        if (hasChanges) spriteHasChanges = true;
         const confCls = pct > 75 ? "sa-diff-conf-good" : pct > 40 ? "sa-diff-conf-ok" : "sa-diff-conf-bad";
 
         const card = Object.assign(document.createElement("div"), { className: "sa-inspector-diff-script-card" });
@@ -1724,6 +1866,29 @@ export default async function ({ addon, msg, console }) {
         if (changed > 0) cardHdr.appendChild(makeDiffBadge(`${changed} changed`, "sa-diff-changed"));
         if (inserted > 0) cardHdr.appendChild(makeDiffBadge(`+${inserted}`, "sa-diff-inserted"));
         if (deleted > 0) cardHdr.appendChild(makeDiffBadge(`−${deleted}`, "sa-diff-deleted"));
+        if (moved > 0) cardHdr.appendChild(makeDiffBadge(`↕${moved} moved`, "sa-diff-moved"));
+        if (swapped > 0) cardHdr.appendChild(makeDiffBadge(`↔${swapped} swapped`, "sa-diff-swapped"));
+
+        if (hasChanges) {
+          const sbsBtn = Object.assign(document.createElement("button"), {
+            className: "sa-inspector-issue-go-btn",
+            title: "Open side-by-side comparison in a floating panel",
+            textContent: "⇄",
+          });
+          sbsBtn.addEventListener("click", () => {
+            openSideBySidePopup(
+              hatText,
+              ops,
+              refBlocks,
+              stuBlocks,
+              spriteNameMap,
+              match,
+              blockToIR,
+              normalizeNodeForDisplay
+            );
+          });
+          cardHdr.appendChild(sbsBtn);
+        }
 
         const goBtn = Object.assign(document.createElement("button"), {
           className: "sa-inspector-issue-go-btn",
@@ -1740,65 +1905,38 @@ export default async function ({ addon, msg, console }) {
         card.appendChild(cardHdr);
 
         if (hasChanges) {
-          const refBlocks = match.refTarget.blocks ?? {};
-          const stuBlocks = match.studentTarget.blocks ?? {};
           const bodyEl = Object.assign(document.createElement("div"), { className: "sa-inspector-diff-body" });
-          let lineCount = 0;
-          const cap = 30;
-          const nonMatchOps = ops.filter((op) => op.type !== "match");
-          for (const op of nonMatchOps) {
-            if (lineCount >= cap) {
-              bodyEl.appendChild(
-                Object.assign(document.createElement("div"), {
-                  className: "sa-diff-line sa-diff-line-more",
-                  textContent: `… (${nonMatchOps.length - cap} more)`,
-                })
-              );
-              break;
-            }
-            if (op.type === "change") {
-              const rb = refBlocks[op.refBlockId];
-              const sb = stuBlocks[op.studentBlockId];
-              if (rb && sb) {
-                const refLine = formatBlockLine(rb, refBlocks);
-                const stuLine = formatBlockLine(sb, stuBlocks);
-                // If the rendered pseudocode is identical the change is a pure rename
-                // already captured in the NameMap — skip it to avoid noisy output.
-                if (refLine === stuLine) continue;
-                bodyEl.appendChild(makeDiffBodyLine("delete", `− ${refLine}`, null, null));
-                lineCount++;
-                bodyEl.appendChild(
-                  makeDiffBodyLine("insert", `+ ${stuLine}`, op.studentBlockId, match.studentTarget.name)
-                );
-                lineCount++;
-              }
-            } else if (op.type === "insert") {
-              const b = stuBlocks[op.studentBlockId];
-              bodyEl.appendChild(
-                makeDiffBodyLine(
-                  "insert",
-                  `+ ${b ? formatBlockLine(b, stuBlocks) : op.opcode}`,
-                  op.studentBlockId,
-                  match.studentTarget.name
-                )
-              );
-              lineCount++;
-            } else if (op.type === "delete") {
-              const b = refBlocks[op.refBlockId];
-              bodyEl.appendChild(
-                makeDiffBodyLine("delete", `− ${b ? formatBlockLine(b, refBlocks) : op.opcode}`, null, null)
-              );
-              lineCount++;
-            }
-          }
+          const lineCount = renderDiffBodyUnified(
+            bodyEl,
+            ops,
+            refBlocks,
+            stuBlocks,
+            spriteNameMap,
+            match,
+            blockToIR,
+            normalizeNodeForDisplay
+          );
           if (lineCount > 0) card.appendChild(bodyEl);
         }
-        container.appendChild(card);
+        if (hasChanges) spriteFrag.appendChild(card);
+        else cleanScriptCount++;
+      }
+
+      if (cleanScriptCount > 0) {
+        spriteFrag.appendChild(
+          Object.assign(document.createElement("div"), {
+            className: "sa-inspector-diff-clean-scripts-note",
+            textContent: `✅ ${cleanScriptCount} script${cleanScriptCount === 1 ? "" : "s"} had no differences (hidden)`,
+          })
+        );
       }
 
       for (const { scriptId } of targetUnmatched) {
-        const hatBlock = (refTarget?.blocks ?? {})[scriptId];
-        const hatText = getHatText(hatBlock, refTarget?.blocks ?? {});
+        const hatNode = normalizeNodeForDisplay(
+          blockToIR(scriptId, refTarget?.blocks ?? {}),
+          nameMaps.get(targetName) ?? null
+        );
+        const hatText = getHatText(hatNode);
         const card = Object.assign(document.createElement("div"), {
           className: "sa-inspector-diff-script-card sa-diff-missing-script",
         });
@@ -1810,8 +1948,20 @@ export default async function ({ addon, msg, console }) {
           Object.assign(document.createElement("span"), { className: "sa-diff-script-hat", textContent: hatText })
         );
         card.appendChild(cardHdr);
-        container.appendChild(card);
+        spriteFrag.appendChild(card);
       }
+
+      if (spriteHasChanges) container.appendChild(spriteFrag);
+      else hiddenCleanSprites++;
+    }
+
+    if (hiddenCleanSprites > 0) {
+      container.appendChild(
+        Object.assign(document.createElement("div"), {
+          className: "sa-inspector-diff-clean-sprites-note",
+          textContent: `✅ ${hiddenCleanSprites} sprite${hiddenCleanSprites === 1 ? "" : "s"} had no differences (hidden)`,
+        })
+      );
     }
 
     // ── Extra scripts in student ──────────────────────────────────────────────
@@ -1830,8 +1980,8 @@ export default async function ({ addon, msg, console }) {
           })
         );
         for (const scriptId of ids) {
-          const hatBlock = (target.blocks ?? {})[scriptId];
-          const hatText = getHatText(hatBlock, target.blocks ?? {});
+          const hatNode = blockToIR(scriptId, target.blocks ?? {});
+          const hatText = getHatText(hatNode);
           const card = Object.assign(document.createElement("div"), {
             className: "sa-inspector-diff-script-card sa-diff-extra-script",
           });
@@ -1863,15 +2013,446 @@ export default async function ({ addon, msg, console }) {
     );
   }
 
+  // Wrap already-built row elements in a collapsed-by-default group behind a
+  // small toggle summary line — used for high-confidence sprite matches /
+  // renames, which are almost always correct and mostly just clutter the more
+  // interesting (uncertain, missing, extra) rows above them. `groupClass`, if
+  // given, is applied to the inner row container (e.g. to reuse a table's
+  // padding), matching the class of the sibling container these rows would
+  // otherwise have been appended to.
+  function makeCollapsibleRows(rows, summaryText, groupClass) {
+    const wrap = Object.assign(document.createElement("div"), { className: "sa-inspector-collapsible" });
+    const toggle = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-collapsible-toggle",
+      textContent: `▸ ${summaryText}`,
+    });
+    const group = Object.assign(document.createElement("div"), {
+      className: `sa-inspector-collapsible-group${groupClass ? ` ${groupClass}` : ""}`,
+    });
+    group.style.display = "none";
+    group.append(...rows);
+    toggle.addEventListener("click", () => {
+      const isHidden = group.style.display === "none";
+      group.style.display = isHidden ? "" : "none";
+      toggle.textContent = `${isHidden ? "▾" : "▸"} ${summaryText}`;
+    });
+    wrap.append(toggle, group);
+    return wrap;
+  }
+
+  // 2 spaces per level of C-block nesting (matching renderSequence's indent
+  // step), so nested statements keep their visual structure in the diff view.
+  // `depth` may be null (op has no block on that side) — treated as top level.
+  function indentPrefix(depth) {
+    return "  ".repeat(depth ?? 0);
+  }
+
+  // Render a script's diff as stacked "− ref" / "+ student" lines, showing only
+  // the differences (matches are skipped entirely). A moved statement is shown
+  // at BOTH its old and new position (each independently, since they occupy
+  // different points in this stacked list) rather than collapsed to one line,
+  // so it's clear where it moved from as well as to. Returns the number of
+  // lines appended.
+  function renderDiffBodyUnified(
+    bodyEl,
+    ops,
+    refBlocks,
+    stuBlocks,
+    spriteNameMap,
+    match,
+    blockToIR,
+    normalizeNodeForDisplay
+  ) {
+    let lineCount = 0;
+    const cap = 30;
+    const nonMatchOps = ops.filter((op) => op.type !== "match");
+    for (const op of nonMatchOps) {
+      if (lineCount >= cap) {
+        bodyEl.appendChild(
+          Object.assign(document.createElement("div"), {
+            className: "sa-diff-line sa-diff-line-more",
+            textContent: `… (${nonMatchOps.length - cap} more)`,
+          })
+        );
+        break;
+      }
+      if (op.swapped) {
+        // Two adjacent statements that just swapped position — show the
+        // student's actual (current) content at each position with a distinct
+        // badge, rather than the usual before/after word-diff, since nothing
+        // about the statement itself changed (see markSwappedPairs).
+        const node = blockToIR(op.studentBlockId, stuBlocks);
+        const text = node ? formatBlockLine(node) : op.opcode;
+        const frag = document.createDocumentFragment();
+        frag.appendChild(makeDiffBadge("↔ swapped", "sa-diff-swapped"));
+        frag.appendChild(document.createTextNode(` ${indentPrefix(op.studentDepth)}${text}`));
+        bodyEl.appendChild(
+          makeDiffBodyLineNode("swapped", frag, op.studentBlockId, match.studentTarget.name, "sa-diff-row-start")
+        );
+        lineCount++;
+        continue;
+      }
+      if (op.moved) {
+        const frag = document.createDocumentFragment();
+        if (op.type === "delete") {
+          const refNode = normalizeNodeForDisplay(blockToIR(op.refBlockId, refBlocks), spriteNameMap);
+          const text = refNode ? formatBlockLine(refNode) : op.opcode;
+          // Only the "moved" badge gets the blue background — the statement text
+          // itself stays plain, same as an unchanged line, since its content
+          // didn't change, only its position.
+          frag.appendChild(makeDiffBadge("↕ moved away", "sa-diff-moved"));
+          frag.appendChild(document.createTextNode(` ${indentPrefix(op.refDepth)}${text}`));
+          bodyEl.appendChild(makeDiffBodyLineNode("moved", frag, null, null, "sa-diff-row-start"));
+        } else {
+          const node = blockToIR(op.studentBlockId, stuBlocks);
+          const text = node ? formatBlockLine(node) : op.opcode;
+          frag.appendChild(makeDiffBadge("↕ moved here", "sa-diff-moved"));
+          frag.appendChild(document.createTextNode(` ${indentPrefix(op.studentDepth)}${text}`));
+          bodyEl.appendChild(
+            makeDiffBodyLineNode("moved", frag, op.studentBlockId, match.studentTarget.name, "sa-diff-row-start")
+          );
+        }
+        lineCount++;
+        continue;
+      }
+      if (op.type === "change") {
+        const refNode = normalizeNodeForDisplay(blockToIR(op.refBlockId, refBlocks), spriteNameMap);
+        const stuNode = blockToIR(op.studentBlockId, stuBlocks);
+        if (refNode && stuNode) {
+          const refLine = formatBlockLine(refNode);
+          const stuLine = formatBlockLine(stuNode);
+          // If the rendered pseudocode is identical the change is a pure rename
+          // already captured in the NameMap — skip it to avoid noisy output.
+          if (refLine === stuLine) continue;
+          // Show both the before (ref) and after (student) lines, each with just
+          // its own differing word(s) highlighted. This is a positional word-level
+          // diff between the two rendered lines, not a search for changedFields
+          // values as literal substrings — position (not content) disambiguates,
+          // so it stays correct even when the same name appears more than once in
+          // a line (e.g. a list used as both the source and destination of an
+          // "add ... to ..." block).
+          const wordOps = wordDiff(tokenizeLine(refLine), tokenizeLine(stuLine));
+          const refHighlighted = buildDiffLineFragment(`− ${indentPrefix(op.refDepth)}`, wordOps, "delete");
+          const stuHighlighted = buildDiffLineFragment(`+ ${indentPrefix(op.studentDepth)}`, wordOps, "insert");
+
+          bodyEl.appendChild(
+            makeDiffBodyLineNode("delete", refHighlighted, null, null, "sa-diff-line-partial sa-diff-row-start")
+          );
+          lineCount++;
+          bodyEl.appendChild(
+            makeDiffBodyLineNode(
+              "insert",
+              stuHighlighted,
+              op.studentBlockId,
+              match.studentTarget.name,
+              "sa-diff-line-partial"
+            )
+          );
+          lineCount++;
+        }
+      } else if (op.type === "insert") {
+        const node = blockToIR(op.studentBlockId, stuBlocks);
+        bodyEl.appendChild(
+          makeDiffBodyLine(
+            "insert",
+            `+ ${indentPrefix(op.studentDepth)}${node ? formatBlockLine(node) : op.opcode}`,
+            op.studentBlockId,
+            match.studentTarget.name
+          )
+        );
+        lineCount++;
+      } else if (op.type === "delete") {
+        const node = normalizeNodeForDisplay(blockToIR(op.refBlockId, refBlocks), spriteNameMap);
+        bodyEl.appendChild(
+          makeDiffBodyLine(
+            "delete",
+            `− ${indentPrefix(op.refDepth)}${node ? formatBlockLine(node) : op.opcode}`,
+            null,
+            null
+          )
+        );
+        lineCount++;
+      }
+    }
+    return lineCount;
+  }
+
+  // Render a script's diff as two aligned columns (reference | student). Unlike
+  // the unified view, "match" ops are also rendered (as plain context lines) so
+  // rows stay lined up between the two columns — that alignment is the whole
+  // point of a side-by-side view. Each row contributes exactly two DOM children
+  // (left cell, right cell) to the grid container — a moved statement's old and
+  // new position each get their own row (ref-only / student-only, like a delete
+  // and an insert), so both endpoints of the move are visible. The "more" cap
+  // line is the only row that spans both columns — see .sa-diff-line-full in
+  // userstyle.css. Returns the number of rows appended.
+  function renderDiffBodySplit(
+    bodyEl,
+    ops,
+    refBlocks,
+    stuBlocks,
+    spriteNameMap,
+    match,
+    blockToIR,
+    normalizeNodeForDisplay
+  ) {
+    bodyEl.appendChild(
+      Object.assign(document.createElement("div"), { className: "sa-diff-col-header", textContent: "Reference" })
+    );
+    bodyEl.appendChild(
+      Object.assign(document.createElement("div"), { className: "sa-diff-col-header", textContent: "Student" })
+    );
+
+    let lineCount = 0;
+    const cap = 60;
+
+    const appendMatchRow = (refText, studentBlockId, stuText) => {
+      bodyEl.appendChild(
+        makeDiffBodyLineNode("match", document.createTextNode(refText), null, null, "sa-diff-col-left")
+      );
+      bodyEl.appendChild(
+        makeDiffBodyLineNode(
+          "match",
+          document.createTextNode(stuText),
+          studentBlockId,
+          match.studentTarget.name,
+          "sa-diff-col-right"
+        )
+      );
+    };
+
+    for (const op of ops) {
+      if (lineCount >= cap) {
+        bodyEl.appendChild(
+          Object.assign(document.createElement("div"), {
+            className: "sa-diff-line sa-diff-line-more sa-diff-line-full",
+            textContent: `… (${ops.length - cap} more)`,
+          })
+        );
+        break;
+      }
+
+      if (op.swapped) {
+        // Two adjacent statements that just swapped position — show both
+        // sides' actual content (unlike a "change", there's no before/after
+        // for the same statement here, just two real, unrelated positions),
+        // each tagged with a small badge instead of red/green word-diffing.
+        const refNode = normalizeNodeForDisplay(blockToIR(op.refBlockId, refBlocks), spriteNameMap);
+        const stuNode = blockToIR(op.studentBlockId, stuBlocks);
+        const refText = indentPrefix(op.refDepth) + (refNode ? formatBlockLine(refNode) : op.opcode);
+        const stuText = indentPrefix(op.studentDepth) + (stuNode ? formatBlockLine(stuNode) : op.opcode);
+        const leftFrag = document.createDocumentFragment();
+        leftFrag.appendChild(makeDiffBadge("↔", "sa-diff-swapped"));
+        leftFrag.appendChild(document.createTextNode(` ${refText}`));
+        const rightFrag = document.createDocumentFragment();
+        rightFrag.appendChild(makeDiffBadge("↔", "sa-diff-swapped"));
+        rightFrag.appendChild(document.createTextNode(` ${stuText}`));
+        bodyEl.appendChild(makeDiffBodyLineNode("swapped", leftFrag, null, null, "sa-diff-col-left sa-diff-row-start"));
+        bodyEl.appendChild(
+          makeDiffBodyLineNode(
+            "swapped",
+            rightFrag,
+            op.studentBlockId,
+            match.studentTarget.name,
+            "sa-diff-col-right sa-diff-row-start"
+          )
+        );
+        lineCount++;
+        continue;
+      }
+
+      if (op.moved) {
+        const frag = document.createDocumentFragment();
+        if (op.type === "delete") {
+          const refNode = normalizeNodeForDisplay(blockToIR(op.refBlockId, refBlocks), spriteNameMap);
+          const text = refNode ? formatBlockLine(refNode) : op.opcode;
+          frag.appendChild(makeDiffBadge("↕ moved away", "sa-diff-moved"));
+          frag.appendChild(document.createTextNode(` ${indentPrefix(op.refDepth)}${text}`));
+          bodyEl.appendChild(makeDiffBodyLineNode("moved", frag, null, null, "sa-diff-col-left sa-diff-row-start"));
+          bodyEl.appendChild(makeDiffEmptyCell("sa-diff-col-right sa-diff-line-moved-empty sa-diff-row-start"));
+        } else {
+          const node = blockToIR(op.studentBlockId, stuBlocks);
+          const text = node ? formatBlockLine(node) : op.opcode;
+          frag.appendChild(makeDiffBadge("↕ moved here", "sa-diff-moved"));
+          frag.appendChild(document.createTextNode(` ${indentPrefix(op.studentDepth)}${text}`));
+          bodyEl.appendChild(makeDiffEmptyCell("sa-diff-col-left sa-diff-line-moved-empty sa-diff-row-start"));
+          bodyEl.appendChild(
+            makeDiffBodyLineNode(
+              "moved",
+              frag,
+              op.studentBlockId,
+              match.studentTarget.name,
+              "sa-diff-col-right sa-diff-row-start"
+            )
+          );
+        }
+        lineCount++;
+        continue;
+      }
+
+      if (op.type === "match") {
+        const refNode = normalizeNodeForDisplay(blockToIR(op.refBlockId, refBlocks), spriteNameMap);
+        const stuNode = blockToIR(op.studentBlockId, stuBlocks);
+        const refText = indentPrefix(op.refDepth) + (refNode ? formatBlockLine(refNode) : op.opcode);
+        const stuText = indentPrefix(op.studentDepth) + (stuNode ? formatBlockLine(stuNode) : op.opcode);
+        appendMatchRow(refText, op.studentBlockId, stuText);
+        lineCount++;
+      } else if (op.type === "change") {
+        const refNode = normalizeNodeForDisplay(blockToIR(op.refBlockId, refBlocks), spriteNameMap);
+        const stuNode = blockToIR(op.studentBlockId, stuBlocks);
+        if (refNode && stuNode) {
+          const refLine = formatBlockLine(refNode);
+          const stuLine = formatBlockLine(stuNode);
+          // Pure rename already captured in the NameMap — show as context, not a diff.
+          if (refLine === stuLine) {
+            appendMatchRow(
+              indentPrefix(op.refDepth) + refLine,
+              op.studentBlockId,
+              indentPrefix(op.studentDepth) + stuLine
+            );
+            lineCount++;
+            continue;
+          }
+          const wordOps = wordDiff(tokenizeLine(refLine), tokenizeLine(stuLine));
+          const refHighlighted = buildDiffLineFragment(indentPrefix(op.refDepth), wordOps, "delete");
+          const stuHighlighted = buildDiffLineFragment(indentPrefix(op.studentDepth), wordOps, "insert");
+          bodyEl.appendChild(
+            makeDiffBodyLineNode(
+              "delete",
+              refHighlighted,
+              null,
+              null,
+              "sa-diff-line-partial sa-diff-col-left sa-diff-row-start"
+            )
+          );
+          bodyEl.appendChild(
+            makeDiffBodyLineNode(
+              "insert",
+              stuHighlighted,
+              op.studentBlockId,
+              match.studentTarget.name,
+              "sa-diff-line-partial sa-diff-col-right sa-diff-row-start"
+            )
+          );
+          lineCount++;
+        }
+      } else if (op.type === "insert") {
+        const node = blockToIR(op.studentBlockId, stuBlocks);
+        bodyEl.appendChild(makeDiffEmptyCell("sa-diff-col-left"));
+        bodyEl.appendChild(
+          makeDiffBodyLineNode(
+            "insert",
+            document.createTextNode(indentPrefix(op.studentDepth) + (node ? formatBlockLine(node) : op.opcode)),
+            op.studentBlockId,
+            match.studentTarget.name,
+            "sa-diff-col-right"
+          )
+        );
+        lineCount++;
+      } else if (op.type === "delete") {
+        const node = normalizeNodeForDisplay(blockToIR(op.refBlockId, refBlocks), spriteNameMap);
+        bodyEl.appendChild(
+          makeDiffBodyLineNode(
+            "delete",
+            document.createTextNode(indentPrefix(op.refDepth) + (node ? formatBlockLine(node) : op.opcode)),
+            null,
+            null,
+            "sa-diff-col-left"
+          )
+        );
+        bodyEl.appendChild(makeDiffEmptyCell("sa-diff-col-right"));
+        lineCount++;
+      }
+    }
+    return lineCount;
+  }
+
+  // An empty placeholder cell for the side of a split-view row that has no
+  // counterpart (an insert's reference side, or a delete's student side).
+  function makeDiffEmptyCell(extraClass) {
+    return Object.assign(document.createElement("div"), {
+      className: `sa-diff-line sa-diff-line-empty${extraClass ? ` ${extraClass}` : ""}`,
+    });
+  }
+
+  const MIN_POPUP_WIDTH = 480;
+  const MIN_POPUP_HEIGHT = 240;
+
+  // Open a small floating, draggable, resizable panel containing just one
+  // script's side-by-side (reference | student) diff. Kept separate from the
+  // main inspector panel so the main script list can stay in its more compact
+  // unified view while still offering the wider side-by-side layout on demand.
+  function openSideBySidePopup(
+    hatText,
+    ops,
+    refBlocks,
+    stuBlocks,
+    spriteNameMap,
+    match,
+    blockToIR,
+    normalizeNodeForDisplay
+  ) {
+    const popup = Object.assign(document.createElement("div"), { className: "sa-inspector-sbs-popup" });
+
+    const header = Object.assign(document.createElement("div"), { className: "sa-inspector-sbs-header" });
+    const title = Object.assign(document.createElement("span"), {
+      className: "sa-inspector-sbs-title",
+      textContent: hatText,
+    });
+    const closeBtn = Object.assign(document.createElement("button"), {
+      className: "sa-inspector-close-btn",
+      textContent: "✕",
+    });
+    closeBtn.addEventListener("click", () => popup.remove());
+    header.append(title, closeBtn);
+
+    const bodyWrap = Object.assign(document.createElement("div"), { className: "sa-inspector-sbs-body-wrap" });
+    const bodyEl = Object.assign(document.createElement("div"), {
+      className: "sa-inspector-diff-body sa-diff-body-split",
+    });
+    renderDiffBodySplit(bodyEl, ops, refBlocks, stuBlocks, spriteNameMap, match, blockToIR, normalizeNodeForDisplay);
+    bodyWrap.appendChild(bodyEl);
+
+    popup.append(header, bodyWrap);
+    makeDraggable(header, popup);
+    // Unlike the main panel, this popup allows resizing from the right too —
+    // its scrollbar is widened in CSS (see .sa-inspector-sbs-popup ::-webkit-
+    // scrollbar) so there's still enough exposed scrollbar track to grab even
+    // with the resize handle sharing the same edge.
+    for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
+      popup.appendChild(makeResizeHandle(dir, popup));
+    }
+
+    const width = Math.max(MIN_POPUP_WIDTH, Math.min(900, window.innerWidth - 40));
+    const height = Math.max(MIN_POPUP_HEIGHT, Math.min(600, window.innerHeight - 80));
+    popup.style.width = width + "px";
+    popup.style.height = height + "px";
+    popup.style.left = Math.max(0, (window.innerWidth - width) / 2) + "px";
+    popup.style.top = Math.max(0, (window.innerHeight - height) / 2) + "px";
+
+    document.body.appendChild(popup);
+  }
+
   function makeDiffBadge(text, cls) {
     return Object.assign(document.createElement("span"), { className: `sa-diff-badge ${cls}`, textContent: text });
   }
 
   // Create a single diff body line with optional per-block 🎯 Go button.
   function makeDiffBodyLine(diffType, text, blockId, spriteName) {
-    const el = Object.assign(document.createElement("div"), { className: `sa-diff-line sa-diff-line-${diffType}` });
-    el.appendChild(
-      Object.assign(document.createElement("span"), { className: "sa-diff-line-text", textContent: text })
+    return makeDiffBodyLineNode(diffType, document.createTextNode(text), blockId, spriteName);
+  }
+
+  // Same as makeDiffBodyLine, but takes an arbitrary node (e.g. a fragment with
+  // <mark> spans for token-level highlighting) instead of a plain text string.
+  // `extraClass`, if given, is appended to the line's className (used to mark lines
+  // that only highlight specific changed token(s) so the base text can stay neutral
+  // instead of inheriting the delete/insert line's full red/green colour).
+  function makeDiffBodyLineNode(diffType, contentNode, blockId, spriteName, extraClass) {
+    const el = Object.assign(document.createElement("div"), {
+      className: `sa-diff-line sa-diff-line-${diffType}${extraClass ? ` ${extraClass}` : ""}`,
+    });
+    el.appendChild(Object.assign(document.createElement("span"), { className: "sa-diff-line-text" })).appendChild(
+      contentNode
     );
     if (blockId && spriteName) {
       const btn = Object.assign(document.createElement("button"), {
@@ -1889,13 +2470,76 @@ export default async function ({ addon, msg, console }) {
     return el;
   }
 
+  // Split a rendered pseudocode line into tokens for word-level diffing, keeping
+  // whitespace runs as their own tokens so the original spacing is preserved
+  // exactly when reassembled.
+  function tokenizeLine(line) {
+    return line.split(/(\s+)/).filter((t) => t !== "");
+  }
+
+  // LCS-based diff between two token arrays — the same technique used for
+  // statement-level diffing in project-differ.js, applied at word granularity for
+  // display. Returns an array of {type: "match"|"delete"|"insert", token}.
+  // Position (not content) disambiguates which occurrence changed, so this stays
+  // correct even when the same word appears more than once in a line (e.g. a list
+  // name used as both the source and destination of an "add ... to ..." block) —
+  // unlike a plain substring search for a changed value.
+  function wordDiff(refTokens, stuTokens) {
+    const n = refTokens.length,
+      m = stuTokens.length;
+    const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i][j] = refTokens[i] === stuTokens[j] ? 1 + dp[i + 1][j + 1] : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const ops = [];
+    let i = 0,
+      j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && refTokens[i] === stuTokens[j]) {
+        ops.push({ type: "match", token: refTokens[i] });
+        i++;
+        j++;
+      } else if (j >= m || (i < n && dp[i + 1][j] >= dp[i][j + 1])) {
+        ops.push({ type: "delete", token: refTokens[i] });
+        i++;
+      } else {
+        ops.push({ type: "insert", token: stuTokens[j] });
+        j++;
+      }
+    }
+    return ops;
+  }
+
+  // Build a DocumentFragment for one side (ref or student) of a word-diff,
+  // prefixed with `prefix` (e.g. "− " / "+ "). "match" tokens are kept as plain
+  // text on both sides; tokens of `keepType` ("delete" for the ref side, "insert"
+  // for the student side) are wrapped in <mark>; tokens of the other type are
+  // omitted (they belong to the other side).
+  function buildDiffLineFragment(prefix, ops, keepType) {
+    const frag = document.createDocumentFragment();
+    frag.appendChild(document.createTextNode(prefix));
+    for (const op of ops) {
+      if (op.type === "match") {
+        frag.appendChild(document.createTextNode(op.token));
+      } else if (op.type === keepType) {
+        frag.appendChild(
+          Object.assign(document.createElement("mark"), { className: "sa-diff-token-changed", textContent: op.token })
+        );
+      }
+    }
+    return frag;
+  }
+
   // Render a single block as a pseudocode line (header only for C-blocks).
-  function formatBlockLine(block, blocks) {
-    if (block.opcode === "procedures_definition") return "define " + getProcSignature(blocks, block);
-    const cDef = C_BLOCKS[block.opcode];
-    if (cDef) return cDef.header(block, blocks);
-    const fmt = STATEMENT_FORMATTERS[block.opcode];
-    return fmt ? fmt(block, blocks) : block.opcode;
+  // Render a single IRNode as a pseudocode line (header only for C-blocks).
+  function formatBlockLine(node) {
+    if (node.opcode === "procedures_definition") return "define " + procSignatureFromNode(node);
+    const cDef = C_BLOCKS[node.opcode];
+    if (cDef) return cDef.header(node);
+    const fmt = STATEMENT_FORMATTERS[node.opcode];
+    return fmt ? fmt(node) : node.opcode;
   }
 
   // Highlight block IDs in the current workspace using an SVG outline clone
@@ -1957,12 +2601,12 @@ export default async function ({ addon, msg, console }) {
     _diffHighlightCleanup = () => clearTimeout(timer);
   }
 
-  // Return a human-readable description of a hat/top-level block.
-  function getHatText(hatBlock, blocks) {
-    if (!hatBlock) return "(unknown hat)";
-    if (hatBlock.opcode === "procedures_definition") return "define " + getProcSignature(blocks, hatBlock);
-    const fmt = STATEMENT_FORMATTERS[hatBlock.opcode];
-    return fmt ? fmt(hatBlock, blocks) : hatBlock.opcode;
+  // Return a human-readable description of a hat/top-level IRNode.
+  function getHatText(node) {
+    if (!node) return "(unknown hat)";
+    if (node.opcode === "procedures_definition") return "define " + procSignatureFromNode(node);
+    const fmt = STATEMENT_FORMATTERS[node.opcode];
+    return fmt ? fmt(node) : node.opcode;
   }
 
   // ─── Toolbar click ─────────────────────────────────────────────────────────
@@ -1972,7 +2616,7 @@ export default async function ({ addon, msg, console }) {
     try {
       const project = getCurrentProjectFromVM();
       currentFingerprint = fingerprintProject(project);
-      upsertCurrentTab(projectToPseudocode(project));
+      upsertCurrentTab(await projectToPseudocode(project));
       ensureCompareTabs();
       if (!panel || !document.body.contains(panel)) createPanel();
       switchTab(0);
@@ -2015,7 +2659,7 @@ export default async function ({ addon, msg, console }) {
     const projectId = input.trim();
     try {
       const project = await fetchProjectById(projectId);
-      loadCompareReference(`#${projectId}`, projectToComparePseudocode(project), project);
+      loadCompareReference(`#${projectId}`, await projectToComparePseudocode(project), project);
     } catch (e) {
       alert(msg("fetch-error", { error: String(e) }));
     }
@@ -2203,7 +2847,7 @@ Looks / sound / motion — use exact block names:
 
     tab.issueState = "streaming";
     tab.streamText = "";
-    renderIssuesContent(tab);
+    void renderIssuesContent(tab);
 
     let response;
     try {
@@ -2225,7 +2869,7 @@ Looks / sound / motion — use exact block names:
       });
     } catch (e) {
       tab.issueState = "paste";
-      renderIssuesContent(tab);
+      void renderIssuesContent(tab);
       alert(`API request failed: ${e}`);
       return;
     }
@@ -2233,7 +2877,7 @@ Looks / sound / motion — use exact block names:
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       tab.issueState = "paste";
-      renderIssuesContent(tab);
+      void renderIssuesContent(tab);
       alert(`GitHub Models API error ${response.status}: ${body.slice(0, 200)}`);
       return;
     }
@@ -2301,7 +2945,7 @@ Looks / sound / motion — use exact block names:
     }
     const estCostUsd = (usageIn / 1e6) * rates.in + (usageOut / 1e6) * rates.out;
     tab._usageSummary = `${usageIn.toLocaleString()} in / ${usageOut.toLocaleString()} out tokens ≈ $${estCostUsd.toFixed(4)}`;
-    renderIssuesContent(tab);
+    void renderIssuesContent(tab);
   }
 
   // Build a comparison prompt for an LLM given student and reference pseudocode.
@@ -2372,7 +3016,7 @@ Looks / sound / motion — use exact block names:
       try {
         const project = await readSb3File(file);
         const label = file.name.replace(/\.sb[23]$/i, "");
-        loadCompareReference(label, projectToComparePseudocode(project), project);
+        loadCompareReference(label, await projectToComparePseudocode(project), project);
       } catch (e) {
         alert(msg("fetch-error", { error: String(e) }));
       }
@@ -2385,9 +3029,15 @@ Looks / sound / motion — use exact block names:
   // ═══════════════════════════════════════════════════════════════════════════
 
   // ─── Field / input helpers ─────────────────────────────────────────────────
+  //
+  // These operate on IRNodes (see block-ir.js) rather than raw VM block JSON.
+  // Every entry in INLINE_FORMATTERS / STATEMENT_FORMATTERS / C_BLOCKS below calls
+  // ONLY these shared helpers to read fields/inputs — never `.fields`/`.inputs`
+  // directly — so migrating rendering onto the IR only required rewriting the
+  // handful of helpers here, not any of the ~80 per-opcode formatter entries.
 
-  function field(block, name) {
-    return block.fields?.[name]?.[0] ?? "?";
+  function field(node, name) {
+    return node.fields?.[name] ?? "?";
   }
 
   // Escape helpers for user-defined names. Each escapes only the characters that would
@@ -2411,103 +3061,70 @@ Looks / sound / motion — use exact block names:
     return str.replace(/\\/g, "\\\\").replace(/>/g, "\\>");
   }
 
-  // Resolve a literal input array [type, value, ...] to a string
-  function resolveLiteral(lit) {
-    if (!Array.isArray(lit)) return String(lit ?? "?");
-    const [type, value] = lit;
-    switch (type) {
-      case 4:
-      case 5:
-      case 6:
-      case 7:
-      case 8: // numbers / angles — round brackets (reporter style)
+  // Scratch uses underscore-wrapped tokens for a handful of built-in menu targets;
+  // translate them to readable names when rendering a bare shadow-menu slot.
+  const INTERNAL_TOKENS = {
+    _myself_: "myself",
+    _mouse_: "mouse-pointer",
+    _random_: "random position",
+    _edge_: "edge",
+    _stage_: "Stage",
+  };
+
+  // Render a "literal" InputSlot (see block-ir.js) to a string, using its `shape`
+  // to pick bracket style — this replicates the old per-storage-format behaviour
+  // (an inline number/string/colour primitive vs. a bare shadow-menu selection)
+  // now that both are unified into one slot shape by the IR.
+  function renderLiteralSlot(slot) {
+    const value = slot.value ?? "";
+    switch (slot.shape) {
+      case "number":
         return `(${value})`;
-      case 9: // colour
+      case "colour":
         return value;
-      case 10: // string: numeric → (n), empty string → [""], text → [text]
+      case "string":
+        // numeric-looking text still renders as a number; empty string as [""]
         if (value !== "" && isFinite(value)) return `(${value})`;
         return value === "" ? `[""]` : `[${qVar(value)}]`;
-      case 11: // broadcast name — [name]
-        return `[${qVar(value)}]`;
-      case 12: // variable reporter used as a value — (name) round brackets
-        return `(${qVar(value)})`;
-      case 13: // list reporter used as a value — (name) round brackets
-        return `(${qVar(value)})`;
+      case "menu":
       default:
-        return String(value ?? "?");
+        // Bare shadow-menu text (e.g. a costume/sound/target dropdown) — brackets
+        // (if any) are added by the caller (resolveSlot), not here.
+        return qVar(INTERNAL_TOKENS[value] ?? value);
     }
   }
 
-  // Resolve an input slot to a string (reporter block or literal).
-  //
-  // Scratch input arrays have the form [outerMode, primary, secondary?] where:
-  //   outerMode 1 = shadow only (primary IS the value, no block on top)
-  //   outerMode 2 = block, no shadow (primary is a block ID string)
-  //   outerMode 3 = block obscuring shadow (primary is block ID or inline primitive)
-  //
-  // primary / secondary can each be:
-  //   - a string  → block ID in the blocks dict (reporter or shadow menu block)
-  //   - an array  → inline primitive [type, value, ...] (variable [12], list [13],
-  //                 broadcast [11], or a number/string/colour literal [4-10])
-  //
-  // Crucially, variable/list/broadcast reporters used as inputs are stored as inline
-  // arrays, NOT as entries in the blocks dict, so checking typeof === "string" alone
-  // would miss them and silently return empty.
-  function resolveInput(blocks, block, inputName) {
-    const input = block.inputs?.[inputName];
-    if (!input) return "?";
-    const [, primary, secondary] = input;
-
-    if (typeof primary === "string") {
-      // Block ID — look it up (reporter or shadow menu)
-      if (blocks?.[primary]) return renderReporter(blocks, primary);
-    } else if (Array.isArray(primary)) {
-      // Inline primitive (variable, list, broadcast, or literal)
-      return resolveLiteral(primary);
-    }
-
-    // Fall back to shadow slot
-    if (Array.isArray(secondary)) return resolveLiteral(secondary);
-    if (typeof secondary === "string" && blocks?.[secondary]) return renderReporter(blocks, secondary);
-    return String(secondary ?? "?");
-  }
-
-  // Render a reporter/boolean block inline (no newline)
-  function renderReporter(blocks, blockId) {
-    const block = blocks[blockId];
-    if (!block) return "?";
-
-    const fmt = INLINE_FORMATTERS[block.opcode];
-    if (fmt) return fmt(block, blocks);
-
-    // Shadow menu blocks (e.g. motion_goto_menu, looks_costume, sensing_keyoptions, etc.)
-    // These hold a user-defined name — rendered inside [...] by the caller, so escape ] only.
-    // Scratch uses underscore-wrapped tokens for built-in targets; translate them to readable names.
-    if (block.shadow) {
-      const firstField = Object.values(block.fields ?? {})[0];
-      if (firstField) {
-        const INTERNAL_TOKENS = {
-          _myself_: "myself",
-          _mouse_: "mouse-pointer",
-          _random_: "random position",
-          _edge_: "edge",
-          _stage_: "Stage",
-        };
-        const raw = firstField[0];
-        // Return "name v" — callers that wrap in [...] produce [name v]
-        return qVar(INTERNAL_TOKENS[raw] ?? raw);
+  // Resolve an InputSlot to a string (reporter block, variable/list/broadcast name,
+  // or literal). Recurses into nested reporters via `slot.node` — no blocksDict
+  // lookup needed, since the IR already carries every child node inline.
+  function resolveInput(_blocks, node, inputName) {
+    const slot = node.inputs?.[inputName];
+    if (!slot) return "?";
+    switch (slot.kind) {
+      case "literal":
+        return renderLiteralSlot(slot);
+      case "variable":
+      case "list":
+        // Variable/list reporters used as a value — (name) round brackets.
+        return `(${qVar(slot.name)})`;
+      case "broadcast":
+        return `[${qVar(slot.name)}]`;
+      case "block": {
+        const fmt = INLINE_FORMATTERS[slot.node.opcode];
+        return fmt ? fmt(slot.node) : `(${slot.node.opcode})`;
       }
+      case "empty":
+      default:
+        return "?";
     }
-
-    return `(${block.opcode})`;
   }
 
   // Resolve a slot that may be either a fixed menu choice or a computed reporter.
   // Fixed menu values (bare text from a shadow block) get wrapped in [...].
   // Computed values that already carry their own delimiters — (reporter), <bool>,
   // [broadcast], [text] — are returned as-is.
-  function resolveSlot(blocks, block, inputName) {
-    const val = resolveInput(blocks, block, inputName);
+  function resolveSlot(_blocks, node, inputName) {
+    const val = resolveInput(_blocks, node, inputName);
     // Already delimited — reporter, boolean, broadcast, or string literal
     if (val.startsWith("(") || val.startsWith("<") || val.startsWith("[")) return val;
     // Bare menu text — wrap in [...]
@@ -2516,6 +3133,10 @@ Looks / sound / motion — use exact block names:
 
   // ─── Procedure helpers ─────────────────────────────────────────────────────
 
+  // Sorting-only helper (see getOrderedTopLevelIds) — reads raw block JSON directly
+  // since it runs before any IR conversion happens for a target's scripts. Kept
+  // separate from procSignatureFromNode below (the rendering-path equivalent) to
+  // avoid forcing the purely-synchronous sort/order logic to depend on the IR.
   function getProcSignature(blocks, defBlock) {
     const protoInput = defBlock.inputs?.["custom_block"];
     if (!protoInput) return "(unknown)";
@@ -2535,23 +3156,23 @@ Looks / sound / motion — use exact block names:
     });
   }
 
-  function formatProcCall(block) {
-    const proccode = block.mutation?.proccode ?? "(unknown)";
-    const argIds = JSON.parse(block.mutation?.argumentids ?? "[]");
-    let i = 0;
-    return proccode.replace(/%[sb]/g, () => {
-      const id = argIds[i++];
-      return id ? resolveInput(null, block, id) : "?";
-    });
+  // Render a procedures_definition IRNode's signature, e.g.
+  // "jump (height) times <is fast>". The prototype's proccode/argumentnames are
+  // already promoted onto the definition node's own `mutation` by blockToIR.
+  function procSignatureFromNode(defNode) {
+    if (!defNode.mutation) return "(unknown)";
+    return formatProccode(defNode.mutation.proccode ?? "", defNode.mutation.argumentnames ?? []);
   }
 
-  function formatProcCallWithBlocks(block, blocks) {
-    const proccode = block.mutation?.proccode ?? "(unknown)";
-    const argIds = JSON.parse(block.mutation?.argumentids ?? "[]");
+  // Render a procedures_call IRNode's text, e.g. "jump (10) times <true>".
+  // mutation.argumentids is already a decoded array (see block-ir.js).
+  function formatProcCall(node) {
+    const proccode = node.mutation?.proccode ?? "(unknown)";
+    const argIds = node.mutation?.argumentids ?? [];
     let i = 0;
     return proccode.replace(/%[sb]/g, () => {
       const id = argIds[i++];
-      return id ? resolveInput(blocks, block, id) : "?";
+      return id ? resolveInput(null, node, id) : "?";
     });
   }
 
@@ -2737,7 +3358,7 @@ Looks / sound / motion — use exact block names:
     data_hidelist: (b) => `hide list [${qVar(field(b, "LIST"))}]`,
 
     // Procedures (statement call)
-    procedures_call: (b, blocks) => formatProcCallWithBlocks(b, blocks),
+    procedures_call: (b) => formatProcCall(b),
   };
 
   // ─── C-block (control structure) definitions ───────────────────────────────
@@ -2770,40 +3391,40 @@ Looks / sound / motion — use exact block names:
 
   // ─── Sequence renderer ─────────────────────────────────────────────────────
 
-  function renderSequence(blocks, startId, indent) {
+  // Renders a chain of statement IRNodes (starting at `node`) into pseudocode
+  // lines. Purely synchronous — substacks are already arrays of IRNodes (built
+  // once by block-ir.js), so no further block lookups or async imports are needed
+  // once the caller has converted the script's hat to an IRNode.
+  function renderSequence(node, indent) {
     const lines = [];
-    let currentId = startId;
+    let cur = node;
 
-    while (currentId) {
-      const block = blocks[currentId];
-      if (!block) break;
-
-      const cDef = C_BLOCKS[block.opcode];
+    while (cur) {
+      const cDef = C_BLOCKS[cur.opcode];
       if (cDef) {
-        lines.push(indent + cDef.header(block, blocks));
+        lines.push(indent + cDef.header(cur));
         for (let si = 0; si < cDef.substacks.length; si++) {
           if (si === 1 && cDef.elseLabel) lines.push(indent + cDef.elseLabel);
-          const substackInput = block.inputs?.[cDef.substacks[si]];
-          const substackId = substackInput && typeof substackInput[1] === "string" ? substackInput[1] : null;
-          if (substackId) {
-            lines.push(...renderSequence(blocks, substackId, indent + "  "));
+          const body = cur.substacks[cDef.substacks[si]];
+          if (body && body.length > 0) {
+            lines.push(...renderSequence(body[0], indent + "  "));
           }
         }
         if (!cDef.noEnd) lines.push(indent + "end");
       } else {
-        const fmt = STATEMENT_FORMATTERS[block.opcode];
+        const fmt = STATEMENT_FORMATTERS[cur.opcode];
         if (fmt) {
-          lines.push(indent + fmt(block, blocks));
+          lines.push(indent + fmt(cur));
         } else {
           // Unknown / extension block — show opcode and key fields
-          const fieldStr = Object.entries(block.fields ?? {})
-            .map(([k, v]) => `${k}: ${v[0]}`)
+          const fieldStr = Object.entries(cur.fields)
+            .map(([k, v]) => `${k}: ${v}`)
             .join(", ");
-          lines.push(indent + `[${block.opcode}${fieldStr ? ` | ${fieldStr}` : ""}]`);
+          lines.push(indent + `[${cur.opcode}${fieldStr ? ` | ${fieldStr}` : ""}]`);
         }
       }
 
-      currentId = block.next;
+      cur = cur.next;
     }
 
     return lines;
@@ -2890,7 +3511,7 @@ Looks / sound / motion — use exact block names:
 
   // ─── Target (sprite / stage) renderer ─────────────────────────────────────
 
-  function targetToPseudocode(target, isStage) {
+  async function targetToPseudocode(target, isStage) {
     const lines = [];
     const divider = "═".repeat(48);
 
@@ -2944,30 +3565,31 @@ Looks / sound / motion — use exact block names:
     // Scripts
     const blocks = target.blocks ?? {};
     const scriptIds = getOrderedTopLevelIds(blocks);
+    const blockToIR = await getBlockToIR();
 
     for (let scriptNum = 0; scriptNum < scriptIds.length; scriptNum++) {
       const scriptId = scriptIds[scriptNum];
       const topBlock = blocks[scriptId];
       if (!topBlock) continue;
+      const hatNode = blockToIR(scriptId, blocks);
 
       lines.push(`  SCRIPT #${scriptNum + 1}:  [→ ${scriptId}]`);
 
-      // Render hat / definition header, indented under SCRIPT label
-      if (topBlock.opcode === "procedures_definition") {
-        const protoInput = topBlock.inputs?.["custom_block"];
-        const protoId = typeof protoInput?.[1] === "string" ? protoInput[1] : null;
-        const proto = protoId ? blocks[protoId] : null;
-        const warp = proto?.mutation?.warp;
+      // Render hat / definition header, indented under SCRIPT label. The
+      // procedures_prototype's warp/proccode/argumentnames are already promoted
+      // onto hatNode.mutation by blockToIR — no separate custom_block lookup needed.
+      if (hatNode.opcode === "procedures_definition") {
+        const warp = hatNode.mutation?.warp;
         const warpPrefix = warp === "true" || warp === true ? "warp " : "";
-        lines.push("    define " + warpPrefix + getProcSignature(blocks, topBlock) + ":");
+        lines.push("    define " + warpPrefix + procSignatureFromNode(hatNode) + ":");
       } else {
-        const hatFmt = STATEMENT_FORMATTERS[topBlock.opcode];
-        if (hatFmt) lines.push("    " + hatFmt(topBlock, blocks));
+        const hatFmt = STATEMENT_FORMATTERS[hatNode.opcode];
+        if (hatFmt) lines.push("    " + hatFmt(hatNode));
       }
 
       // Render body one level deeper, indented under the hat
-      if (topBlock.next) {
-        lines.push(...renderSequence(blocks, topBlock.next, "      "));
+      if (hatNode.next) {
+        lines.push(...renderSequence(hatNode.next, "      "));
       }
       lines.push("");
     }
@@ -2977,7 +3599,7 @@ Looks / sound / motion — use exact block names:
 
   // ─── Project renderer ──────────────────────────────────────────────────────
 
-  function projectToPseudocode(project) {
+  async function projectToPseudocode(project) {
     const parts = [];
 
     // Guidance for AI comparison:
@@ -2998,10 +3620,10 @@ Looks / sound / motion — use exact block names:
     const stage = (project.targets ?? []).find((t) => t.isStage);
 
     for (const sprite of sprites) {
-      parts.push(targetToPseudocode(sprite, false));
+      parts.push(await targetToPseudocode(sprite, false));
     }
     if (stage) {
-      parts.push(targetToPseudocode(stage, true));
+      parts.push(await targetToPseudocode(stage, true));
     }
 
     return parts.join("\n");
@@ -3011,7 +3633,7 @@ Looks / sound / motion — use exact block names:
   // Strips variable values, costume/backdrop names, and sound names.
   // Keeps variable/list names (for scope analysis) and all script bodies.
   // Saves ~20-30% tokens vs the full pseudocode for typical projects.
-  function targetToComparePseudocode(target, isStage) {
+  async function targetToComparePseudocode(target, isStage) {
     const lines = [];
     const divider = "═".repeat(48);
 
@@ -3037,28 +3659,27 @@ Looks / sound / motion — use exact block names:
     // Scripts — identical to the full renderer
     const blocks = target.blocks ?? {};
     const scriptIds = getOrderedTopLevelIds(blocks);
+    const blockToIR = await getBlockToIR();
 
     for (let scriptNum = 0; scriptNum < scriptIds.length; scriptNum++) {
       const scriptId = scriptIds[scriptNum];
       const topBlock = blocks[scriptId];
       if (!topBlock) continue;
+      const hatNode = blockToIR(scriptId, blocks);
 
       lines.push(`  SCRIPT #${scriptNum + 1}:  [→ ${scriptId}]`);
 
-      if (topBlock.opcode === "procedures_definition") {
-        const protoInput = topBlock.inputs?.["custom_block"];
-        const protoId = typeof protoInput?.[1] === "string" ? protoInput[1] : null;
-        const proto = protoId ? blocks[protoId] : null;
-        const warp = proto?.mutation?.warp;
+      if (hatNode.opcode === "procedures_definition") {
+        const warp = hatNode.mutation?.warp;
         const warpPrefix = warp === "true" || warp === true ? "warp " : "";
-        lines.push("    define " + warpPrefix + getProcSignature(blocks, topBlock) + ":");
+        lines.push("    define " + warpPrefix + procSignatureFromNode(hatNode) + ":");
       } else {
-        const hatFmt = STATEMENT_FORMATTERS[topBlock.opcode];
-        if (hatFmt) lines.push("    " + hatFmt(topBlock, blocks));
+        const hatFmt = STATEMENT_FORMATTERS[hatNode.opcode];
+        if (hatFmt) lines.push("    " + hatFmt(hatNode));
       }
 
-      if (topBlock.next) {
-        lines.push(...renderSequence(blocks, topBlock.next, "      "));
+      if (hatNode.next) {
+        lines.push(...renderSequence(hatNode.next, "      "));
       }
       lines.push("");
     }
@@ -3066,12 +3687,12 @@ Looks / sound / motion — use exact block names:
     return lines.join("\n");
   }
 
-  function projectToComparePseudocode(project) {
+  async function projectToComparePseudocode(project) {
     const parts = ["// [x] = menu/dropdown/variable target/text   (x) = reporter/value   <x> = boolean", ""];
     const sprites = (project.targets ?? []).filter((t) => !t.isStage);
     const stage = (project.targets ?? []).find((t) => t.isStage);
-    for (const sprite of sprites) parts.push(targetToComparePseudocode(sprite, false));
-    if (stage) parts.push(targetToComparePseudocode(stage, true));
+    for (const sprite of sprites) parts.push(await targetToComparePseudocode(sprite, false));
+    if (stage) parts.push(await targetToComparePseudocode(stage, true));
     return parts.join("\n");
   }
 }
