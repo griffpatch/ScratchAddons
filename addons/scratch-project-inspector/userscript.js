@@ -2121,9 +2121,18 @@ export default async function ({ addon, msg, console }) {
         if (refNode && stuNode) {
           const refLine = formatBlockLine(refNode);
           const stuLine = formatBlockLine(stuNode);
-          // If the rendered pseudocode is identical the change is a pure rename
-          // already captured in the NameMap — skip it to avoid noisy output.
-          if (refLine === stuLine) continue;
+          // If the rendered pseudocode is identical, this is usually a pure
+          // rename already captured in the NameMap — nothing to show. But
+          // changedFields can still carry a real difference invisible in the
+          // text (e.g. a procedure's own parameter swapped for a same-named
+          // variable, which renders exactly the same as the parameter) —
+          // surface that instead of silently dropping the line.
+          if (refLine === stuLine) {
+            if (!op.changedFields) continue;
+            bodyEl.appendChild(makeSemanticChangeLine(op, stuLine, match, "sa-diff-row-start"));
+            lineCount++;
+            continue;
+          }
           // Show both the before (ref) and after (student) lines, each with just
           // its own differing word(s) highlighted. This is a positional word-level
           // diff between the two rendered lines, not a search for changedFields
@@ -2303,12 +2312,44 @@ export default async function ({ addon, msg, console }) {
         if (refNode && stuNode) {
           const refLine = formatBlockLine(refNode);
           const stuLine = formatBlockLine(stuNode);
-          // Pure rename already captured in the NameMap — show as context, not a diff.
+          // Pure rename already captured in the NameMap — show as context, not
+          // a diff. But changedFields can still carry a real difference
+          // invisible in the text (e.g. a procedure's own parameter swapped
+          // for a same-named variable) — surface that instead of hiding it.
           if (refLine === stuLine) {
-            appendMatchRow(
-              indentPrefix(op.refDepth) + refLine,
-              op.studentBlockId,
-              indentPrefix(op.studentDepth) + stuLine
+            if (!op.changedFields) {
+              appendMatchRow(
+                indentPrefix(op.refDepth) + refLine,
+                op.studentBlockId,
+                indentPrefix(op.studentDepth) + stuLine
+              );
+              lineCount++;
+              continue;
+            }
+            const detail = changedFieldsSummary(op.changedFields);
+            const leftFrag = document.createDocumentFragment();
+            leftFrag.appendChild(makeDiffBadge("⚠", "sa-diff-changed"));
+            leftFrag.appendChild(document.createTextNode(` ${indentPrefix(op.refDepth)}${refLine}`));
+            const rightFrag = document.createDocumentFragment();
+            rightFrag.appendChild(makeDiffBadge("⚠", "sa-diff-changed"));
+            rightFrag.appendChild(document.createTextNode(` ${indentPrefix(op.studentDepth)}${stuLine} `));
+            rightFrag.appendChild(
+              Object.assign(document.createElement("span"), {
+                className: "sa-diff-semantic-detail",
+                textContent: `(${detail})`,
+              })
+            );
+            bodyEl.appendChild(
+              makeDiffBodyLineNode("change", leftFrag, null, null, "sa-diff-col-left sa-diff-row-start")
+            );
+            bodyEl.appendChild(
+              makeDiffBodyLineNode(
+                "change",
+                rightFrag,
+                op.studentBlockId,
+                match.studentTarget.name,
+                "sa-diff-col-right sa-diff-row-start"
+              )
             );
             lineCount++;
             continue;
@@ -2435,6 +2476,33 @@ export default async function ({ addon, msg, console }) {
 
   function makeDiffBadge(text, cls) {
     return Object.assign(document.createElement("span"), { className: `sa-diff-badge ${cls}`, textContent: text });
+  }
+
+  // Summarise a "change" op's changedFields (Map<path, {ref, student}>) as
+  // "ref → student, ref2 → student2, ...". Only meant for the case where the
+  // rendered pseudocode text is identical on both sides (see
+  // makeSemanticChangeLine and its split-view equivalent) — a normal word-diffed
+  // line already shows the difference directly in its own text.
+  function changedFieldsSummary(changedFields) {
+    return [...changedFields.values()].map((c) => `${c.ref} → ${c.student}`).join(", ");
+  }
+
+  // Render a "change" op whose rendered pseudocode text is IDENTICAL on both
+  // sides, but whose changedFields still recorded a real difference — e.g. a
+  // procedure's own parameter swapped for a same-named variable. A word-diff
+  // would highlight nothing (the words match), so this shows the line once with
+  // a warning badge and the changedFields summary instead.
+  function makeSemanticChangeLine(op, line, match, extraClass) {
+    const frag = document.createDocumentFragment();
+    frag.appendChild(makeDiffBadge("⚠ same text, different meaning", "sa-diff-changed"));
+    frag.appendChild(document.createTextNode(` ${indentPrefix(op.studentDepth)}${line} `));
+    frag.appendChild(
+      Object.assign(document.createElement("span"), {
+        className: "sa-diff-semantic-detail",
+        textContent: `(${changedFieldsSummary(op.changedFields)})`,
+      })
+    );
+    return makeDiffBodyLineNode("change", frag, op.studentBlockId, match.studentTarget.name, extraClass);
   }
 
   // Create a single diff body line with optional per-block 🎯 Go button.
