@@ -26,10 +26,29 @@
  * SpriteNameMap: { variables, lists, broadcasts, procedures }
  *   each a Map<refName, {studentName, confidence, isRename}>
  *   (procedures maps refProccode → {studentProccode, confidence, isRename})
+ *   Also carries `sprites` (global refSpriteName → studentSpriteName map) and
+ *   `allNameMaps` (Map<refSpriteName, SpriteNameMap> — every sprite's own map,
+ *   for cross-sprite lookups like sensing_of's PROPERTY).
  *
  * DiffOp: { type: 'match'|'insert'|'delete'|'change',
- *            refBlockId, studentBlockId, opcode, changedFields }
+ *            refBlockId, studentBlockId, opcode, changedFields,
+ *            refDepth, studentDepth,
+ *            moved?, movedToBlockId?, movedFromBlockId?, swapped?, swappedPrimary? }
+ *   `moved` (delete/insert only): true when this op's block is the same
+ *   statement as a paired delete/insert elsewhere in the same script, just
+ *   relocated — see markMovedPairs. `movedToBlockId`/`movedFromBlockId` point at
+ *   the paired op's block ID on the other side.
+ *   `swapped` (change only): true when this op is one of an adjacent pair of
+ *   "change" ops whose values are each other's exact match — i.e. two statements
+ *   that just swapped position, not genuine field edits — see markSwappedPairs.
+ *   `swappedPrimary` is set on only the first op of the pair, so renderers can
+ *   count/label the pair once.
+ *   `refDepth`/`studentDepth`: C-block nesting depth (0 = top level of the script)
+ *   of the ref/student block respectively, either may be null if that side has no
+ *   block (a pure insert has no refDepth, a pure delete has no studentDepth).
  */
+
+import { scriptToIR } from "./block-ir.js";
 
 // ─── Shared opcode helpers ────────────────────────────────────────────────────
 
@@ -111,151 +130,252 @@ function lcsDiff(refArr, stuArr, keyFn) {
   return ops;
 }
 
-// ─── Script linearisation ─────────────────────────────────────────────────────
+// ─── Script linearisation (IR-based) ──────────────────────────────────────────
 
 /**
- * Flatten a script body into a list of tokens in pseudocode reading order
+ * Flatten a script body into a list of IRNodes in pseudocode reading order
  * (C-block header → substack body → next — matching renderSequence order).
- * The hat block itself is NOT included.
- * Returns [{id, opcode, block}]
+ * The hat block itself is NOT included. Each IRNode already carries its own
+ * `.id`/`.opcode`, so callers no longer need a separate {id, opcode, block} wrapper
+ * (compare to the pre-IR version of this function, which built that wrapper by hand).
+ *
+ * Each node is also tagged with `.depth` (0 = top level of the script body, +1 per
+ * level of C-block nesting) so callers that render the flattened list back out
+ * (e.g. the diff view) can reconstruct indentation. This is a plain property set
+ * during this walk, not part of the IR schema itself — safe because blockToIR
+ * builds a fresh node tree on every call, never a cached/shared one.
  */
-function lineariseScript(blocks, hatId) {
+function lineariseScriptIR(blocks, hatId) {
+  const hatNode = scriptToIR(hatId, blocks);
   const tokens = [];
-  function visitSeq(id) {
-    let cur = id;
+  function visit(node, depth) {
+    let cur = node;
     while (cur) {
-      const b = blocks[cur];
-      if (!b || b.shadow) break;
-      tokens.push({ id: cur, opcode: b.opcode, block: b });
-      for (const name of ["SUBSTACK", "SUBSTACK2"]) {
-        const sub = b.inputs?.[name];
-        if (sub && typeof sub[1] === "string") visitSeq(sub[1]);
+      cur.depth = depth;
+      tokens.push(cur);
+      for (const key of ["SUBSTACK", "SUBSTACK2"]) {
+        const body = cur.substacks[key];
+        if (body && body.length > 0) visit(body[0], depth + 1);
       }
-      cur = b.next;
+      cur = cur.next;
     }
   }
-  const hat = blocks[hatId];
-  if (hat?.next) visitSeq(hat.next);
+  if (hatNode?.next) visit(hatNode.next, 0);
   return tokens;
 }
 
-// ─── Block name key ───────────────────────────────────────────────────────────
+// ─── IR node key (structural match/mismatch decision) ────────────────────────
 
 /**
- * Build a string key for a block that captures opcode + field values + a compact
- * description of immediate input slots (up to 2 levels deep into non-shadow
- * reporter blocks). Optionally normalises variable/list/broadcast names via a
- * SpriteNameMap.
- *
- * Going 2 levels deep catches bugs like:
- *   data_addtolist LIST=TRACK Y  whose ITEM input is  data_itemoflist LIST=TRACK X
- * …where the top-level field is correct but the reporter child's field is wrong.
- *
- * Also catches cases like  (item (track idx) of [TRACK Y])  vs  (item (1) of [TRACK Y])
- * in matched scripts, where the INDEX input of data_itemoflist differs.
+ * Build a string key for an IRNode that captures its opcode + field values + ALL
+ * nested input slots, recursively, with NO depth cap (unlike the pre-IR
+ * blockNameKey, which stopped 2 levels deep — see DIFF-IR-PLAN.md Phase 2).
+ * Optionally normalises variable/list/broadcast/parameter names via a
+ * SpriteNameMap. Two nodes with the same opcode and an identical key are
+ * considered equivalent; used to decide "match" vs "change" for statement pairs
+ * already LCS-aligned by opcode in diffScriptBody.
  */
-function blockNameKey(block, blocks, spriteNameMap) {
-  function normName(fn, val) {
-    if (!spriteNameMap) return val;
-    if (fn === "VARIABLE") return spriteNameMap.variables.get(val)?.studentName ?? val;
-    if (fn === "LIST") return spriteNameMap.lists.get(val)?.studentName ?? val;
-    if (fn === "BROADCAST_OPTION") return spriteNameMap.broadcasts.get(val)?.studentName ?? val;
-    // Procedure parameter names stored in argument reporter VALUE fields are tracked
-    // in a separate parameters NameMap to avoid collision with sprite variables that
-    // happen to share the same name (e.g. a variable 'dist' and a param 'dist' are
-    // independent namespaces in Scratch).
-    if (fn === "VALUE") return spriteNameMap.parameters?.get(val)?.studentName ?? val;
-    return val;
-  }
-
-  // Compact description of an input slot, up to `depth` levels deep.
-  // Captures inline primitives, shadow default values, and non-shadow reporter chains.
-  function describeSlot(inputArr, depth) {
-    const [, primary] = inputArr ?? [];
-    if (Array.isArray(primary)) {
-      // Inline primitive [type, value]
-      const [type, value] = primary;
-      if (type === 12) return `var(${normName("VARIABLE", String(value ?? ""))})`;
-      if (type === 13) return `list(${normName("LIST", String(value ?? ""))})`; // Inline broadcast ref (type 11): use bc() prefix to match shadow BROADCAST_OPTION
-      if (type === 11) return `bc(${normName("BROADCAST_OPTION", String(value ?? ""))})`;
-      return `lit(${type}:${value ?? ""})`;
-    }
-    if (typeof primary !== "string" || !blocks) return null;
-    const child = blocks[primary];
-    if (!child) return null;
-    if (child.shadow) {
-      const entries = Object.entries(child.fields ?? {});
-      if (entries.length > 0) {
-        const [fieldName, fieldVal] = entries[0];
-        let val = fieldVal[0] ?? "";
-        if (fieldName === "BROADCAST_OPTION") {
-          // Use bc() prefix (same as inline type-11) so both storage formats produce
-          // the same key and can be matched across projects.
-          const normalized = spriteNameMap?.broadcasts?.get(val)?.studentName ?? val;
-          return `bc(${normalized})`;
-        }
-        if (spriteNameMap) val = spriteNameMap.sprites?.get(val) ?? val;
-        return `shad(${val})`;
-      }
-      return "shad";
-    }
-    // Non-shadow reporter: include opcode + its own fields
-    let d = child.opcode;
-    for (const [fn, fv] of Object.entries(child.fields ?? {})) {
-      d += `:${fn}=${normName(fn, fv[0] ?? "")}`;
-    }
-    // Recurse into the child's own inputs (decrement depth)
-    if (depth > 0) {
-      for (const [iName, inp] of Object.entries(child.inputs ?? {})) {
-        if (iName === "SUBSTACK" || iName === "SUBSTACK2" || iName === "custom_block") continue;
-        const nested = describeSlot(inp, depth - 1);
-        if (nested) d += `[${iName}:${nested}]`;
-      }
-    }
-    return d;
-  }
-
-  const parts = [block.opcode];
+function irKey(node, spriteNameMap) {
+  if (!node) return "";
 
   // procedures_call: the proccode lives in mutation (not fields) and argument IDs
   // are UUIDs that differ between projects. Key on normalised proccode + positional
   // argument descriptions instead of the default field+input approach.
-  if (block.opcode === "procedures_call" && block.mutation) {
-    const proccode = block.mutation.proccode ?? "";
+  if (node.opcode === "procedures_call") {
+    const proccode = node.mutation?.proccode ?? "";
     const normalizedProccode = spriteNameMap?.procedures.get(proccode)?.studentProccode ?? proccode;
-    const argIds = JSON.parse(block.mutation.argumentids ?? "[]");
-    const k = [`procedures_call:${normalizedProccode}`];
-    if (blocks) {
-      for (let i = 0; i < argIds.length; i++) {
-        const inp = block.inputs?.[argIds[i]];
-        if (inp) {
-          const desc = describeSlot(inp, 2);
-          if (desc) k.push(`arg${i}=${desc}`);
-        }
-      }
+    const argIds = node.mutation?.argumentids ?? [];
+    const parts = [`procedures_call:${normalizedProccode}`];
+    for (let i = 0; i < argIds.length; i++) {
+      const slot = node.inputs[argIds[i]];
+      if (slot) parts.push(`arg${i}=${slotKey(slot, spriteNameMap)}`);
     }
-    return k.join("|");
+    return parts.join("|");
   }
 
-  // Top-level fields
-  for (const [fn, fv] of Object.entries(block.fields ?? {})) {
-    parts.push(`${fn}=${normName(fn, fv[0] ?? "")}`);
+  const parts = [node.opcode];
+  for (const [fn, val] of Object.entries(node.fields)) {
+    parts.push(`${fn}=${normalizeFieldValue(node, fn, val, spriteNameMap)}`);
   }
-
-  // Non-substack input slots (described 2 levels deep — the immediate input child
-  // is described including its own inputs, which are each described 1 further level.
-  // 2 levels from root means 3 total levels of nesting are visible, catching bugs like
-  // (item (track idx) of [TRACK Y]) vs (item (1) of [TRACK Y]) where the INDEX of
-  // data_itemoflist is 3 levels down from the enclosing data_setvariableto statement.)
-  if (blocks) {
-    for (const [iName, inp] of Object.entries(block.inputs ?? {})) {
-      if (iName === "SUBSTACK" || iName === "SUBSTACK2" || iName === "custom_block") continue;
-      const desc = describeSlot(inp, 2);
-      if (desc) parts.push(`${iName}=${desc}`);
-    }
+  for (const [name, slot] of Object.entries(node.inputs)) {
+    parts.push(`${name}=${slotKey(slot, spriteNameMap)}`);
   }
-
   return parts.join("|");
+}
+
+// Compact description of a single InputSlot, recursing into nested reporter blocks
+// with no depth limit.
+function slotKey(slot, spriteNameMap) {
+  switch (slot.kind) {
+    case "literal":
+      // Literal shadow-menu values (e.g. a "touching [Sprite2]?" dropdown) may
+      // actually be a sprite name — normalise via the sprites map, same as
+      // normalizeSlotValue does for the changedFields explanation, so a renamed
+      // sprite reference doesn't get flagged as a spurious "change" here.
+      return `lit(${normalizeSlotValue(slot, spriteNameMap)})`;
+    case "variable":
+      return `var(${normalizeSlotValue(slot, spriteNameMap)})`;
+    case "list":
+      return `list(${normalizeSlotValue(slot, spriteNameMap)})`;
+    case "broadcast":
+      return `bc(${normalizeSlotValue(slot, spriteNameMap)})`;
+    case "block":
+      return irKey(slot.node, spriteNameMap);
+    case "empty":
+    default:
+      return "";
+  }
+}
+
+// Normalise a block's own top-level field value (VARIABLE/LIST/BROADCAST_OPTION/
+// a procedure-parameter VALUE) via a SpriteNameMap. Any other field name (e.g. an
+// operator dropdown, a key option) passes through unchanged. Takes the whole node
+// (not just its opcode) because sensing_of's PROPERTY needs to inspect the
+// sibling OBJECT input to know which sprite's variables to check.
+function normalizeFieldValue(node, fieldName, value, spriteNameMap) {
+  if (!spriteNameMap) return value;
+  const opcode = node.opcode;
+  if (fieldName === "VARIABLE") return spriteNameMap.variables.get(value)?.studentName ?? value;
+  if (fieldName === "LIST") return spriteNameMap.lists.get(value)?.studentName ?? value;
+  if (fieldName === "BROADCAST_OPTION") return spriteNameMap.broadcasts.get(value)?.studentName ?? value;
+  // Procedure parameter names stored in argument reporter VALUE fields are tracked
+  // in a separate parameters NameMap to avoid collision with sprite variables that
+  // happen to share the same name (e.g. a variable 'dist' and a param 'dist' are
+  // independent namespaces in Scratch).
+  if (
+    fieldName === "VALUE" &&
+    (opcode === "argument_reporter_string_number" || opcode === "argument_reporter_boolean")
+  ) {
+    return spriteNameMap.parameters?.get(value)?.studentName ?? value;
+  }
+  if (fieldName === "PROPERTY" && opcode === "sensing_of")
+    return normalizeSensingOfProperty(node, value, spriteNameMap);
+  return value;
+}
+
+// sensing_of's PROPERTY dropdown lists either a fixed built-in property (position,
+// direction, costume, size, volume, backdrop) or any of the TARGET sprite's own
+// variables — read cross-sprite through this same dropdown. Since the target may be
+// a DIFFERENT sprite than the one this block lives in, its variable renames live in
+// THAT sprite's own NameMap, not the current one — reached via
+// `spriteNameMap.allNameMaps` (a shared pointer to every sprite's NameMap, attached
+// once by buildNameMaps) rather than threading a second parameter through every
+// diff/render function that doesn't otherwise need it.
+const SENSING_OF_BUILTIN_PROPERTIES = new Set([
+  "x position",
+  "y position",
+  "direction",
+  "costume #",
+  "costume name",
+  "size",
+  "volume",
+  "backdrop #",
+  "backdrop name",
+]);
+function normalizeSensingOfProperty(node, value, spriteNameMap) {
+  if (SENSING_OF_BUILTIN_PROPERTIES.has(value)) return value;
+  const objectSlot = node.inputs?.OBJECT;
+  const objectName = objectSlot?.kind === "literal" ? objectSlot.value : null;
+  const targetVariables = spriteNameMap.allNameMaps?.get(objectName)?.variables;
+  return targetVariables?.get(value)?.studentName ?? value;
+}
+
+// Normalise a variable/list/broadcast InputSlot's name, or (for a literal) fall
+// back to the sprites map — a literal shadow value (e.g. a "point towards
+// [Sprite2]" dropdown) may actually be a sprite name, matching how the pre-IR
+// describeSlot treated any otherwise-unrecognised shadow field value.
+function normalizeSlotValue(slot, spriteNameMap) {
+  if (!spriteNameMap) return slot.kind === "literal" ? slot.value : slot.name;
+  if (slot.kind === "variable") return spriteNameMap.variables.get(slot.name)?.studentName ?? slot.name;
+  if (slot.kind === "list") return spriteNameMap.lists.get(slot.name)?.studentName ?? slot.name;
+  if (slot.kind === "broadcast") return spriteNameMap.broadcasts.get(slot.name)?.studentName ?? slot.name;
+  return spriteNameMap.sprites?.get(slot.value) ?? slot.value;
+}
+
+/**
+ * Return a copy of an IRNode (recursively, including `.next` and `.substacks`)
+ * with every variable/list/broadcast/sprite/procedure/parameter name normalised
+ * via `spriteNameMap`, i.e. rewritten to the STUDENT project's equivalent name.
+ *
+ * Diffing already treats a renamed variable/list/sprite as equivalent (via
+ * `irKey`/`collectNodeDiff`'s use of `normalizeFieldValue`/`normalizeSlotValue`),
+ * but rendering a ref block on its own has no notion of the other project's
+ * vocabulary. Without this, comparing the independently-rendered ref/student
+ * pseudocode text for a "change" diffOp would show every renamed identifier as a
+ * spurious difference, even though the diff engine already knows it's the same
+ * concept. Rendering the ref side through this function first — so both lines
+ * use the student's naming — makes a subsequent text/word diff highlight only
+ * genuine differences.
+ *
+ * Pass `null`/`undefined` for `spriteNameMap` to get an unchanged (but still
+ * cloned) copy — safe to call unconditionally.
+ */
+export function normalizeNodeForDisplay(node, spriteNameMap) {
+  if (!node) return null;
+
+  const fields = {};
+  for (const [fn, val] of Object.entries(node.fields)) {
+    fields[fn] = normalizeFieldValue(node, fn, val, spriteNameMap);
+  }
+
+  const inputs = {};
+  for (const [name, slot] of Object.entries(node.inputs)) {
+    inputs[name] = normalizeSlotForDisplay(slot, spriteNameMap);
+  }
+
+  const substacks = {};
+  for (const [key, arr] of Object.entries(node.substacks)) {
+    substacks[key] = normalizeSubstackForDisplay(arr, spriteNameMap);
+  }
+
+  let mutation = node.mutation;
+  if (mutation) {
+    const proccode = spriteNameMap?.procedures?.get(mutation.proccode)?.studentProccode ?? mutation.proccode;
+    const argumentnames = mutation.argumentnames?.map((n) => spriteNameMap?.parameters?.get(n)?.studentName ?? n);
+    if (proccode !== mutation.proccode || argumentnames) {
+      mutation = { ...mutation, proccode, ...(argumentnames ? { argumentnames } : {}) };
+    }
+  }
+
+  return {
+    id: node.id,
+    opcode: node.opcode,
+    fields,
+    inputs,
+    next: normalizeNodeForDisplay(node.next, spriteNameMap),
+    substacks,
+    mutation,
+  };
+}
+
+function normalizeSlotForDisplay(slot, spriteNameMap) {
+  switch (slot.kind) {
+    case "variable":
+    case "list":
+    case "broadcast":
+      return { kind: slot.kind, name: normalizeSlotValue(slot, spriteNameMap) };
+    case "literal":
+      return { kind: "literal", value: normalizeSlotValue(slot, spriteNameMap), shape: slot.shape };
+    case "block":
+      return { kind: "block", node: normalizeNodeForDisplay(slot.node, spriteNameMap) };
+    case "empty":
+    default:
+      return slot;
+  }
+}
+
+// Normalise a substack (array of IRNodes) the same way blockToIR builds it:
+// normalise the head once (recursing its own `.next` chain), then flatten that
+// same chain into an array, rather than normalising each element independently.
+function normalizeSubstackForDisplay(arr, spriteNameMap) {
+  if (!arr || arr.length === 0) return [];
+  const result = [];
+  let cur = normalizeNodeForDisplay(arr[0], spriteNameMap);
+  while (cur) {
+    result.push(cur);
+    cur = cur.next;
+  }
+  return result;
 }
 
 // ─── Phase 1: Sprite Matching ─────────────────────────────────────────────────
@@ -395,20 +515,6 @@ function coarseMatchScriptsForSprite(refTarget, stuTarget) {
   return { matches, unmatchedRefScripts, unmatchedStudentScripts };
 }
 
-/**
- * Extract a broadcast name from a BROADCAST_INPUT input array, handling both
- * storage formats used by Scratch:
- *   - Shadow block: [1, menuBlockId]  where menuBlock.fields.BROADCAST_OPTION = [name]
- *   - Inline ref:   [1, [11, name, id]]
- */
-function extractBroadcastName(blocks, inputArr) {
-  if (!inputArr) return null;
-  const [, primary] = inputArr;
-  if (Array.isArray(primary) && primary[0] === 11) return String(primary[1] ?? "");
-  if (typeof primary === "string") return blocks[primary]?.fields?.BROADCAST_OPTION?.[0] ?? null;
-  return null;
-}
-
 // ─── Phase 3: Name Mapping ────────────────────────────────────────────────────
 
 /**
@@ -444,93 +550,76 @@ const HIGH_SPECIFICITY_WEIGHT = 3;
 
 /**
  * Recursively walk matching input expression trees in parallel and harvest
- * VARIABLE and LIST rename evidence from inline primitives (type 12/13) and
- * reporter block fields.  Called for each LCS-matched statement block pair
- * so that renames buried deep in expressions (e.g. car y → Car Y inside an
- * operator_add used as the ITEM of data_addtolist) are included in the NameMap
- * and therefore normalised away in blockNameKey.
+ * VARIABLE and LIST rename evidence from variable/list slots — the IR already
+ * unifies both Scratch storage formats (inline primitive vs. shadow menu block)
+ * into one `{kind:"variable"|"list", name}` shape, so both are covered uniformly
+ * here — and from reporter block fields. Called for each LCS-matched statement
+ * node pair so that renames buried deep in expressions (e.g. car y → Car Y inside
+ * an operator_add used as the ITEM of data_addtolist) are included in the NameMap
+ * and therefore normalised away in irKey.
  */
-function collectExprEvidence(refBlocks, stuBlocks, refBlockId, stuBlockId, varEv, listEv, paramEv, depth) {
-  if (depth <= 0) return;
-  const rb = refBlocks[refBlockId],
-    sb = stuBlocks[stuBlockId];
-  if (!rb || !sb || rb.shadow || sb.shadow || rb.opcode !== sb.opcode) return;
+function collectIRExprEvidence(refNode, stuNode, varEv, listEv, paramEv, depth) {
+  if (depth <= 0 || !refNode || !stuNode || refNode.opcode !== stuNode.opcode) return;
 
   // procedures_call: arguments use UUID keys that differ between projects.
   // Match them positionally via mutation.argumentids instead.
-  if (rb.opcode === "procedures_call") {
-    const refArgIds = JSON.parse(rb.mutation?.argumentids ?? "[]");
-    const stuArgIds = JSON.parse(sb.mutation?.argumentids ?? "[]");
+  if (refNode.opcode === "procedures_call") {
+    const refArgIds = refNode.mutation?.argumentids ?? [];
+    const stuArgIds = stuNode.mutation?.argumentids ?? [];
     const len = Math.min(refArgIds.length, stuArgIds.length);
     for (let i = 0; i < len; i++) {
-      const rInp = rb.inputs?.[refArgIds[i]];
-      const sInp = sb.inputs?.[stuArgIds[i]];
-      if (!rInp || !sInp) continue;
-      const [, rPri] = rInp,
-        [, sPri] = sInp;
-      if (Array.isArray(rPri) && Array.isArray(sPri)) {
-        if (rPri[0] === 12 && sPri[0] === 12)
-          addEvidence(varEv, String(rPri[1] ?? ""), String(sPri[1] ?? ""), HIGH_SPECIFICITY_WEIGHT);
-        else if (rPri[0] === 13 && sPri[0] === 13)
-          addEvidence(listEv, String(rPri[1] ?? ""), String(sPri[1] ?? ""), HIGH_SPECIFICITY_WEIGHT);
-      } else if (typeof rPri === "string" && typeof sPri === "string") {
-        const rChild = refBlocks[rPri],
-          sChild = stuBlocks[sPri];
-        if (rChild && sChild && !rChild.shadow && !sChild.shadow) {
-          collectExprEvidence(refBlocks, stuBlocks, rPri, sPri, varEv, listEv, paramEv, depth - 1);
-        }
-      }
+      collectSlotExprEvidence(
+        refNode.inputs[refArgIds[i]],
+        stuNode.inputs[stuArgIds[i]],
+        varEv,
+        listEv,
+        paramEv,
+        depth - 1
+      );
     }
     return;
   }
 
-  // Collect VARIABLE/LIST fields on this block pair itself. Reporter blocks
+  // Collect VARIABLE/LIST fields on this node pair itself. Reporter blocks
   // (data_variable, data_itemoflist, etc.) get a higher weight than common
   // statement blocks (data_setvariableto, data_addtolist, etc.) since they are
   // less prone to coincidental cross-script LCS collisions (see addEvidence).
-  const rv = rb.fields?.VARIABLE?.[0],
-    sv = sb.fields?.VARIABLE?.[0];
-  if (rv && sv) addEvidence(varEv, rv, sv, HIGH_SPECIFICITY_VAR_OPCODES.has(rb.opcode) ? HIGH_SPECIFICITY_WEIGHT : 1);
-  const rl = rb.fields?.LIST?.[0],
-    sl = sb.fields?.LIST?.[0];
-  if (rl && sl) addEvidence(listEv, rl, sl, HIGH_SPECIFICITY_LIST_OPCODES.has(rb.opcode) ? HIGH_SPECIFICITY_WEIGHT : 1);
+  const rv = refNode.fields.VARIABLE,
+    sv = stuNode.fields.VARIABLE;
+  if (rv && sv)
+    addEvidence(varEv, rv, sv, HIGH_SPECIFICITY_VAR_OPCODES.has(refNode.opcode) ? HIGH_SPECIFICITY_WEIGHT : 1);
+  const rl = refNode.fields.LIST,
+    sl = stuNode.fields.LIST;
+  if (rl && sl)
+    addEvidence(listEv, rl, sl, HIGH_SPECIFICITY_LIST_OPCODES.has(refNode.opcode) ? HIGH_SPECIFICITY_WEIGHT : 1);
   // Procedure parameter names live in the VALUE field of argument reporter blocks.
   // They go into a SEPARATE paramEv map so they don’t collide with sprite variables
   // that happen to share the same name (e.g. a variable 'dist' and a param 'dist').
   if (
-    (rb.opcode === "argument_reporter_string_number" || rb.opcode === "argument_reporter_boolean") &&
-    rb.fields?.VALUE?.[0] &&
-    sb.fields?.VALUE?.[0]
+    (refNode.opcode === "argument_reporter_string_number" || refNode.opcode === "argument_reporter_boolean") &&
+    refNode.fields.VALUE &&
+    stuNode.fields.VALUE
   ) {
-    addEvidence(paramEv, rb.fields.VALUE[0], sb.fields.VALUE[0]);
+    addEvidence(paramEv, refNode.fields.VALUE, stuNode.fields.VALUE);
     return; // argument reporters have no further inputs to walk
   }
 
-  // Walk matching input slots
-  for (const [iName, rInp] of Object.entries(rb.inputs ?? {})) {
-    if (iName === "SUBSTACK" || iName === "SUBSTACK2" || iName === "custom_block") continue;
-    const sInp = sb.inputs?.[iName];
-    if (!sInp) continue;
-    const [, rPri] = rInp;
-    const [, sPri] = sInp;
-
-    // Both inline variable (12) or list (13) refs? These are used as VALUES
-    // inside an expression, so they carry high structural specificity.
-    if (Array.isArray(rPri) && Array.isArray(sPri) && rPri[0] === sPri[0]) {
-      if (rPri[0] === 12) addEvidence(varEv, String(rPri[1] ?? ""), String(sPri[1] ?? ""), HIGH_SPECIFICITY_WEIGHT);
-      else if (rPri[0] === 13)
-        addEvidence(listEv, String(rPri[1] ?? ""), String(sPri[1] ?? ""), HIGH_SPECIFICITY_WEIGHT);
-    }
-
-    // Both non-shadow block references → recurse
-    if (typeof rPri === "string" && typeof sPri === "string") {
-      const rChild = refBlocks[rPri],
-        sChild = stuBlocks[sPri];
-      if (rChild && sChild && !rChild.shadow && !sChild.shadow) {
-        collectExprEvidence(refBlocks, stuBlocks, rPri, sPri, varEv, listEv, paramEv, depth - 1);
-      }
-    }
+  // Walk matching input slots. SUBSTACK/SUBSTACK2/custom_block never appear here —
+  // the IR keeps them out of `inputs` entirely (see block-ir.js).
+  for (const [name, refSlot] of Object.entries(refNode.inputs)) {
+    const stuSlot = stuNode.inputs[name];
+    if (!stuSlot) continue;
+    collectSlotExprEvidence(refSlot, stuSlot, varEv, listEv, paramEv, depth - 1);
   }
+}
+
+function collectSlotExprEvidence(refSlot, stuSlot, varEv, listEv, paramEv, depth) {
+  if (!refSlot || !stuSlot || refSlot.kind !== stuSlot.kind) return;
+  // Variable/list refs used as VALUES inside an expression carry high structural
+  // specificity (see addEvidence) regardless of storage format.
+  if (refSlot.kind === "variable") addEvidence(varEv, refSlot.name, stuSlot.name, HIGH_SPECIFICITY_WEIGHT);
+  else if (refSlot.kind === "list") addEvidence(listEv, refSlot.name, stuSlot.name, HIGH_SPECIFICITY_WEIGHT);
+  else if (refSlot.kind === "block") collectIRExprEvidence(refSlot.node, stuSlot.node, varEv, listEv, paramEv, depth);
 }
 
 function buildNameMaps(spriteMatches, coarseScriptMatches) {
@@ -547,8 +636,8 @@ function buildNameMaps(spriteMatches, coarseScriptMatches) {
     const stuBlocks = studentTarget.blocks ?? {};
 
     for (const { refScriptId, studentScriptId } of spritePairs) {
-      const refTokens = lineariseScript(refBlocks, refScriptId);
-      const stuTokens = lineariseScript(stuBlocks, studentScriptId);
+      const refTokens = lineariseScriptIR(refBlocks, refScriptId);
+      const stuTokens = lineariseScriptIR(stuBlocks, studentScriptId);
       if (refTokens.length === 0 || stuTokens.length === 0) continue;
 
       // Hat block evidence: event_whenbroadcastreceived hats are NOT linearised
@@ -562,43 +651,31 @@ function buildNameMaps(spriteMatches, coarseScriptMatches) {
       // LCS-align by opcode only (coarse), then harvest field-value pairs
       for (const op of lcsDiff(refTokens, stuTokens, (t) => t.opcode)) {
         if (op.type !== "match") continue;
-        const rb = refTokens[op.ri].block;
-        const sb = stuTokens[op.si].block;
+        const rn = refTokens[op.ri];
+        const sn = stuTokens[op.si];
 
         for (const fieldType of ["VARIABLE", "LIST", "BROADCAST_OPTION"]) {
-          const refName = rb.fields?.[fieldType]?.[0];
-          const stuName = sb.fields?.[fieldType]?.[0];
-          if (refName === null || refName === undefined || stuName === null || stuName === undefined) continue;
-
-          const evMap = fieldType === "BROADCAST_OPTION" ? globalBroadcastEv : spriteEv[fieldType];
-          if (!evMap.has(refName)) evMap.set(refName, new Map());
-          const nameEv = evMap.get(refName);
-          nameEv.set(stuName, (nameEv.get(stuName) ?? 0) + 1);
+          const refName = rn.fields[fieldType];
+          const stuName = sn.fields[fieldType];
+          if (refName === undefined || stuName === undefined) continue;
+          addEvidence(fieldType === "BROADCAST_OPTION" ? globalBroadcastEv : spriteEv[fieldType], refName, stuName);
         }
 
-        // event_broadcast / event_broadcastandwait: the broadcast name lives in a
-        // shadow menu child (BROADCAST_OPTION field) or as an inline type-11 primitive.
-        // Use a helper to extract the name from either format independently, so that
-        // mixed-format pairs (ref=shadow, student=inline or vice versa) also work.
-        if (rb.opcode === "event_broadcast" || rb.opcode === "event_broadcastandwait") {
-          const rBc = extractBroadcastName(refBlocks, rb.inputs?.BROADCAST_INPUT);
-          const sBc = extractBroadcastName(stuBlocks, sb.inputs?.BROADCAST_INPUT);
-          if (rBc && sBc) addEvidence(globalBroadcastEv, rBc, sBc);
+        // event_broadcast / event_broadcastandwait: the IR already unifies both
+        // storage formats (shadow menu block vs. inline primitive) into one
+        // BROADCAST_INPUT slot, so no separate extraction helper is needed here.
+        if (rn.opcode === "event_broadcast" || rn.opcode === "event_broadcastandwait") {
+          const rSlot = rn.inputs.BROADCAST_INPUT;
+          const sSlot = sn.inputs.BROADCAST_INPUT;
+          if (rSlot?.kind === "broadcast" && sSlot?.kind === "broadcast") {
+            addEvidence(globalBroadcastEv, rSlot.name, sSlot.name);
+          }
         }
 
-        // Also collect evidence from inline var/list refs buried in expression
+        // Also collect evidence from var/list refs buried in expression
         // inputs — captures renames like car y → Car Y that live inside
         // operator_add, operator_multiply etc. rather than in block fields.
-        collectExprEvidence(
-          refBlocks,
-          stuBlocks,
-          refTokens[op.ri].id,
-          stuTokens[op.si].id,
-          spriteEv.VARIABLE,
-          spriteEv.LIST,
-          spriteEv.PARAM,
-          5
-        );
+        collectIRExprEvidence(rn, sn, spriteEv.VARIABLE, spriteEv.LIST, spriteEv.PARAM, 5);
       }
     }
   }
@@ -647,6 +724,10 @@ function buildNameMaps(spriteMatches, coarseScriptMatches) {
       sprites: spritesMap, // shared across all sprites
     });
   }
+  // Let any per-sprite SpriteNameMap reach any OTHER sprite's map — needed for
+  // cross-sprite lookups like sensing_of's PROPERTY (see normalizeSensingOfProperty),
+  // which can read a variable belonging to a different sprite than the block itself.
+  for (const nm of nameMaps.values()) nm.allNameMaps = nameMaps;
   return nameMaps;
 }
 
@@ -891,86 +972,237 @@ function refinedMatchScriptsForSprite(refTarget, stuTarget, spriteNameMap) {
 // ─── Phase 5: Block-level Diff ────────────────────────────────────────────────
 
 /**
+ * Recursively diff two IRNodes assumed to share the same opcode (established by
+ * the caller via LCS-by-opcode + an irKey mismatch), collecting every differing
+ * field/input into `changes` (Map<path, {ref, student}>) — however deep, unlike
+ * the pre-IR changedFields walker, which was capped at one extra level into a
+ * direct non-shadow input child (see DIFF-IR-PLAN.md Phase 2). Only differences
+ * we can describe as a single directly-renderable string (a literal value, or a
+ * variable/list/broadcast name — even across a change of kind, e.g. a variable
+ * reference replaced by a hardcoded literal) are recorded; genuine structural
+ * changes (a nested reporter replaced by a value of a different shape, or two
+ * nested reporters with different opcodes — e.g. `(A*B)*C` reassociated to
+ * `A*(B*C)`) are intentionally left unrecorded: there's no simple string to
+ * safely highlight for those without a pseudocode renderer for the subtree (see
+ * Phase 3). The overall match/mismatch decision for the pair is already handled
+ * independently by irKey, so under-recording here only affects how much of a
+ * "change" we can explain, never whether one was detected.
+ */
+function collectNodeDiff(path, refNode, stuNode, spriteNameMap, changes) {
+  for (const [fn, refVal] of Object.entries(refNode.fields)) {
+    const stuVal = stuNode.fields[fn] ?? "";
+    const normRef = normalizeFieldValue(refNode, fn, refVal, spriteNameMap);
+    if (normRef !== stuVal) changes.set(joinPath(path, fn), { ref: refVal, student: stuVal });
+  }
+  for (const [fn, stuVal] of Object.entries(stuNode.fields)) {
+    if (!(fn in refNode.fields)) changes.set(joinPath(path, fn), { ref: "", student: stuVal });
+  }
+
+  // procedures_call: arguments use UUID keys that differ between projects — match
+  // them positionally via mutation.argumentids instead of by input-slot name.
+  if (refNode.opcode === "procedures_call" && stuNode.opcode === "procedures_call") {
+    const refArgIds = refNode.mutation?.argumentids ?? [];
+    const stuArgIds = stuNode.mutation?.argumentids ?? [];
+    const len = Math.min(refArgIds.length, stuArgIds.length);
+    for (let i = 0; i < len; i++) {
+      collectSlotDiff(
+        joinPath(path, `arg${i}`),
+        refNode.inputs[refArgIds[i]],
+        stuNode.inputs[stuArgIds[i]],
+        spriteNameMap,
+        changes
+      );
+    }
+    return;
+  }
+
+  const inputNames = new Set([...Object.keys(refNode.inputs), ...Object.keys(stuNode.inputs)]);
+  for (const name of inputNames) {
+    collectSlotDiff(joinPath(path, name), refNode.inputs[name], stuNode.inputs[name], spriteNameMap, changes);
+  }
+}
+
+function joinPath(base, segment) {
+  return base ? `${base}.${segment}` : segment;
+}
+
+// A slot's directly-renderable value (matches what appears verbatim in the
+// pseudocode text), or null if it isn't one (a nested reporter, or empty).
+function simpleSlotValue(slot) {
+  if (slot.kind === "literal") return slot.value;
+  if (slot.kind === "variable" || slot.kind === "list" || slot.kind === "broadcast") return slot.name;
+  return null;
+}
+
+function collectSlotDiff(path, refSlot, stuSlot, spriteNameMap, changes) {
+  refSlot = refSlot ?? { kind: "empty" };
+  stuSlot = stuSlot ?? { kind: "empty" };
+
+  const refSimple = simpleSlotValue(refSlot);
+  const stuSimple = simpleSlotValue(stuSlot);
+  if (refSimple !== null && stuSimple !== null) {
+    const normRef = normalizeSlotValue(refSlot, spriteNameMap);
+    if (normRef !== stuSimple) changes.set(path, { ref: refSimple, student: stuSimple });
+    return;
+  }
+
+  if (refSlot.kind === "block" && stuSlot.kind === "block" && refSlot.node.opcode === stuSlot.node.opcode) {
+    collectNodeDiff(path, refSlot.node, stuSlot.node, spriteNameMap, changes);
+  }
+  // Otherwise: a genuine structural change (nested reporter ↔ simple value, two
+  // reporters with different opcodes, or a slot filled/emptied) — see doc comment
+  // on collectNodeDiff above for why this is intentionally not recorded.
+}
+
+/**
  * Compute a block-level diff for a matched script pair.
  * LCS on opcode sequence; matched pairs are then checked for field-value
- * changes (after NameMap normalisation). Returns DiffOp[].
+ * changes (after NameMap normalisation, via a recursive IR tree-diff). A
+ * post-processing pass then detects statements that simply moved to a
+ * different position (see markMovedPairs). Returns DiffOp[].
  */
 function diffScriptBody(refTarget, stuTarget, refScriptId, stuScriptId, spriteNameMap) {
   const refBlocks = refTarget.blocks ?? {};
   const stuBlocks = stuTarget.blocks ?? {};
-  const refTokens = lineariseScript(refBlocks, refScriptId);
-  const stuTokens = lineariseScript(stuBlocks, stuScriptId);
+  const refTokens = lineariseScriptIR(refBlocks, refScriptId);
+  const stuTokens = lineariseScriptIR(stuBlocks, stuScriptId);
 
   if (refTokens.length === 0 && stuTokens.length === 0) return [];
 
-  return lcsDiff(refTokens, stuTokens, (t) => t.opcode).map((op) => {
-    const refBlockId = op.ri >= 0 ? refTokens[op.ri].id : null;
-    const stuBlockId = op.si >= 0 ? stuTokens[op.si].id : null;
-    const opcode = op.ri >= 0 ? refTokens[op.ri].opcode : stuTokens[op.si].opcode;
+  const ops = lcsDiff(refTokens, stuTokens, (t) => t.opcode).map((op) => {
+    const refNode = op.ri >= 0 ? refTokens[op.ri] : null;
+    const stuNode = op.si >= 0 ? stuTokens[op.si] : null;
+    const opcode = refNode?.opcode ?? stuNode?.opcode;
+    const refBlockId = refNode?.id ?? null;
+    const stuBlockId = stuNode?.id ?? null;
+    const refDepth = refNode?.depth ?? null;
+    const studentDepth = stuNode?.depth ?? null;
 
     if (op.type !== "match") {
-      return { type: op.type, refBlockId, studentBlockId: stuBlockId, opcode, changedFields: null };
+      return {
+        type: op.type,
+        refBlockId,
+        studentBlockId: stuBlockId,
+        opcode,
+        changedFields: null,
+        refDepth,
+        studentDepth,
+      };
     }
 
-    // Same opcode — check whether field values agree after normalisation
-    const rb = refTokens[op.ri].block;
-    const sb = stuTokens[op.si].block;
-
-    if (blockNameKey(rb, refBlocks, spriteNameMap) === blockNameKey(sb, stuBlocks, null)) {
-      return { type: "match", refBlockId, studentBlockId: stuBlockId, opcode, changedFields: null };
+    // Same opcode — check whether the two subtrees agree after normalisation.
+    if (irKey(refNode, spriteNameMap) === irKey(stuNode, null)) {
+      return {
+        type: "match",
+        refBlockId,
+        studentBlockId: stuBlockId,
+        opcode,
+        changedFields: null,
+        refDepth,
+        studentDepth,
+      };
     }
 
-    // Something differs — collect which fields changed (top-level and input-level).
+    // Something differs — collect which fields/inputs changed, at any depth.
     const changedFields = new Map();
-
-    // Top-level block fields
-    for (const [fn, fv] of Object.entries(rb.fields ?? {})) {
-      let normRefVal = fv[0] ?? "";
-      if (spriteNameMap) {
-        if (fn === "VARIABLE") normRefVal = spriteNameMap.variables.get(normRefVal)?.studentName ?? normRefVal;
-        else if (fn === "LIST") normRefVal = spriteNameMap.lists.get(normRefVal)?.studentName ?? normRefVal;
-        else if (fn === "BROADCAST_OPTION")
-          normRefVal = spriteNameMap.broadcasts.get(normRefVal)?.studentName ?? normRefVal;
-      }
-      const stuVal = sb.fields?.[fn]?.[0] ?? "";
-      if (normRefVal !== stuVal) changedFields.set(fn, { ref: fv[0] ?? "", student: stuVal });
-    }
-    for (const [fn, fv] of Object.entries(sb.fields ?? {})) {
-      if (!(fn in (rb.fields ?? {}))) changedFields.set(fn, { ref: "", student: fv[0] ?? "" });
-    }
-
-    // Input-level reporter field changes (e.g. data_itemoflist reading wrong list)
-    for (const [inputName, input] of Object.entries(rb.inputs ?? {})) {
-      if (inputName === "SUBSTACK" || inputName === "SUBSTACK2" || inputName === "custom_block") continue;
-      const refChildId = typeof input[1] === "string" ? input[1] : null;
-      const stuInput = sb.inputs?.[inputName];
-      const stuChildId = stuInput && typeof stuInput[1] === "string" ? stuInput[1] : null;
-      if (!refChildId || !stuChildId) continue;
-      const refChild = refBlocks[refChildId];
-      const stuChild = stuBlocks[stuChildId];
-      if (!refChild || !stuChild || refChild.shadow || stuChild.shadow) continue;
-      for (const [fn, fv] of Object.entries(refChild.fields ?? {})) {
-        if (fn !== "VARIABLE" && fn !== "LIST") continue;
-        let normRefVal = fv[0] ?? "";
-        if (spriteNameMap) {
-          if (fn === "VARIABLE") normRefVal = spriteNameMap.variables.get(normRefVal)?.studentName ?? normRefVal;
-          else if (fn === "LIST") normRefVal = spriteNameMap.lists.get(normRefVal)?.studentName ?? normRefVal;
-        }
-        const stuVal = stuChild.fields?.[fn]?.[0] ?? "";
-        if (normRefVal !== stuVal) changedFields.set(`${inputName}.${fn}`, { ref: fv[0] ?? "", student: stuVal });
-      }
-    }
+    collectNodeDiff("", refNode, stuNode, spriteNameMap, changedFields);
 
     // Always "change" when the key differs — changedFields may be null if the
-    // difference is only visible at deeper nesting than we scan.
+    // difference is a structural one we can't safely describe as a simple string
+    // (see collectNodeDiff doc comment).
     return {
       type: "change",
       refBlockId,
       studentBlockId: stuBlockId,
       opcode,
       changedFields: changedFields.size > 0 ? changedFields : null,
+      refDepth,
+      studentDepth,
     };
   });
+
+  const refById = new Map(refTokens.map((t) => [t.id, t]));
+  const stuById = new Map(stuTokens.map((t) => [t.id, t]));
+  markMovedPairs(ops, refById, stuById, spriteNameMap);
+  markSwappedPairs(ops, refById, stuById, spriteNameMap);
+
+  return ops;
+}
+
+/**
+ * Mutate `ops` in place: for every unmatched "delete"/"insert" pair whose
+ * IRNodes have an IDENTICAL irKey (same opcode, same normalised fields/inputs —
+ * i.e. truly the same statement, not just a coincidentally-matching opcode), mark
+ * both with `moved: true` plus a cross-reference to the other's block ID.
+ *
+ * Pure LCS-based diffing can't represent "this statement moved" directly — a
+ * reordering breaks the longest-common-subsequence property, since preserving
+ * relative order is exactly what LCS optimises for — so a relocated statement
+ * (with no other change) surfaces as an unrelated delete-at-its-old-position plus
+ * insert-at-its-new-position instead of a "match". Without this pass, that looks
+ * like a no-op (identical text appears to be both removed and added) even though
+ * the reorder itself can be a meaningful behavioural change in Scratch (execution
+ * order matters). Greedy first-match pairing by key; a moved statement with a
+ * genuine ALSO-different field is still just paired with the first available
+ * matching key — good enough since exact duplicates are the common case this
+ * targets, not proving a single canonical reordering exists.
+ */
+function markMovedPairs(ops, refById, stuById, spriteNameMap) {
+  const inserts = ops.filter((op) => op.type === "insert");
+  const usedInserts = new Set();
+
+  for (const del of ops) {
+    if (del.type !== "delete") continue;
+    const refNode = refById.get(del.refBlockId);
+    if (!refNode) continue;
+    const key = irKey(refNode, spriteNameMap);
+    for (const ins of inserts) {
+      if (usedInserts.has(ins)) continue;
+      const stuNode = stuById.get(ins.studentBlockId);
+      if (!stuNode || irKey(stuNode, null) !== key) continue;
+      del.moved = true;
+      del.movedToBlockId = ins.studentBlockId;
+      ins.moved = true;
+      ins.movedFromBlockId = del.refBlockId;
+      usedInserts.add(ins);
+      break;
+    }
+  }
+}
+
+/**
+ * Mutate `ops` in place: for every adjacent pair of "change" ops with the same
+ * opcode, mark both `swapped: true` if swapping their values would make each
+ * side an EXACT match for the other (same opcode, same normalised fields/inputs)
+ * — i.e. these are really the same two statements, just assigned to each
+ * other's position, not a genuine field-level change.
+ *
+ * LCS aligns same-opcode statements by position, so two adjacent statements
+ * that simply swapped order (e.g. `set effect to BRIGHTNESS` / `set effect to
+ * GHOST` becoming `GHOST` / `BRIGHTNESS`) surface as two unrelated "change" ops
+ * instead of a "match" — each looking like a real field edit when nothing
+ * actually changed except execution order. This only flags EXACT swaps (see
+ * markMovedPairs for the equivalent delete/insert case); a pair that also has a
+ * genuine value difference (e.g. one side's value additionally changed) is
+ * correctly left as two separate "change" ops, since swapping wouldn't make
+ * them identical.
+ */
+function markSwappedPairs(ops, refById, stuById, spriteNameMap) {
+  for (let i = 0; i < ops.length - 1; i++) {
+    const a = ops[i];
+    const b = ops[i + 1];
+    if (a.type !== "change" || b.type !== "change" || a.opcode !== b.opcode) continue;
+    const aRef = refById.get(a.refBlockId);
+    const aStu = stuById.get(a.studentBlockId);
+    const bRef = refById.get(b.refBlockId);
+    const bStu = stuById.get(b.studentBlockId);
+    if (!aRef || !aStu || !bRef || !bStu) continue;
+    if (irKey(aRef, spriteNameMap) === irKey(bStu, null) && irKey(aStu, null) === irKey(bRef, spriteNameMap)) {
+      a.swapped = true;
+      a.swappedPrimary = true;
+      b.swapped = true;
+    }
+  }
 }
 
 // ─── Main orchestrator ────────────────────────────────────────────────────────
