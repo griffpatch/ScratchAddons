@@ -283,8 +283,17 @@ function normalizeSensingOfProperty(node, value, spriteNameMap) {
 // Normalise a variable/list/broadcast InputSlot's name, or (for a literal) fall
 // back to the sprites map — a literal shadow value (e.g. a "point towards
 // [Sprite2]" dropdown) may actually be a sprite name, matching how the pre-IR
-// describeSlot treated any otherwise-unrecognised shadow field value.
+// describeSlot treated any otherwise-unrecognised shadow field value. A
+// procedure parameter reference (see PARAMETER_REPORTER_OPCODES below) is
+// handled first since it's a `{kind:"block"}` slot with no `.name`/`.value` of
+// its own — its displayed name lives one level down, on the wrapped reporter's
+// own VALUE field, and is tracked in a separate `parameters` NameMap from
+// sprite variables.
 function normalizeSlotValue(slot, spriteNameMap) {
+  if (slot.kind === "block" && PARAMETER_REPORTER_OPCODES.has(slot.node.opcode)) {
+    const paramName = slot.node.fields.VALUE ?? "";
+    return spriteNameMap?.parameters?.get(paramName)?.studentName ?? paramName;
+  }
   if (!spriteNameMap) return slot.kind === "literal" ? slot.value : slot.name;
   if (slot.kind === "variable") return spriteNameMap.variables.get(slot.name)?.studentName ?? slot.name;
   if (slot.kind === "list") return spriteNameMap.lists.get(slot.name)?.studentName ?? slot.name;
@@ -978,15 +987,17 @@ function refinedMatchScriptsForSprite(refTarget, stuTarget, spriteNameMap) {
  * the pre-IR changedFields walker, which was capped at one extra level into a
  * direct non-shadow input child (see DIFF-IR-PLAN.md Phase 2). Only differences
  * we can describe as a single directly-renderable string (a literal value, or a
- * variable/list/broadcast name — even across a change of kind, e.g. a variable
- * reference replaced by a hardcoded literal) are recorded; genuine structural
- * changes (a nested reporter replaced by a value of a different shape, or two
- * nested reporters with different opcodes — e.g. `(A*B)*C` reassociated to
- * `A*(B*C)`) are intentionally left unrecorded: there's no simple string to
- * safely highlight for those without a pseudocode renderer for the subtree (see
- * Phase 3). The overall match/mismatch decision for the pair is already handled
- * independently by irKey, so under-recording here only affects how much of a
- * "change" we can explain, never whether one was detected.
+ * variable/list/broadcast/parameter name — even across a change of kind, e.g. a
+ * variable reference replaced by a hardcoded literal, or a procedure's own
+ * parameter replaced by a same-named variable — see simpleSlotValue) are
+ * recorded; genuine structural changes (a nested reporter replaced by a value
+ * of a different shape, or two nested reporters with different opcodes — e.g.
+ * `(A*B)*C` reassociated to `A*(B*C)`) are intentionally left unrecorded:
+ * there's no simple string to safely highlight for those without a pseudocode
+ * renderer for the subtree (see Phase 3). The overall match/mismatch decision
+ * for the pair is already handled independently by irKey, so under-recording
+ * here only affects how much of a "change" we can explain, never whether one
+ * was detected.
  */
 function collectNodeDiff(path, refNode, stuNode, spriteNameMap, changes) {
   for (const [fn, refVal] of Object.entries(refNode.fields)) {
@@ -1026,12 +1037,35 @@ function joinPath(base, segment) {
   return base ? `${base}.${segment}` : segment;
 }
 
+// Reporter opcodes for a procedure's own parameter blocks — the ONLY "real
+// block" (non-inline-primitive) shape that still renders as a single bare name
+// in pseudocode, just like a variable/list reference (see INLINE_FORMATTERS'
+// argument_reporter_string_number/_boolean entries in userscript.js).
+const PARAMETER_REPORTER_OPCODES = new Set(["argument_reporter_string_number", "argument_reporter_boolean"]);
+
 // A slot's directly-renderable value (matches what appears verbatim in the
-// pseudocode text), or null if it isn't one (a nested reporter, or empty).
+// pseudocode text), or null if it isn't one (a nested reporter, or empty). A
+// procedure parameter reference is included here — despite being a real nested
+// block, not an inline primitive — since it renders as a single bare name just
+// like a variable/list reference, so a parameter swapped for a same-named
+// variable/list/literal is exactly the "renamed identifier" case this function
+// already handles for the other simple kinds.
 function simpleSlotValue(slot) {
   if (slot.kind === "literal") return slot.value;
   if (slot.kind === "variable" || slot.kind === "list" || slot.kind === "broadcast") return slot.name;
+  if (slot.kind === "block" && PARAMETER_REPORTER_OPCODES.has(slot.node.opcode)) return slot.node.fields.VALUE ?? "";
   return null;
+}
+
+// A short label for what a "simple" slot (see simpleSlotValue) actually refers
+// to. Used to catch a change that's invisible in rendered pseudocode text — a
+// procedure's own parameter swapped for a same-named variable renders
+// identically (both are just the bare name "dir"), but is a real bug: the
+// value no longer comes from the parameter, it comes from a variable that may
+// not even be in scope the way the author intended.
+function simpleSlotKindLabel(slot) {
+  if (slot.kind === "block") return "parameter";
+  return slot.kind; // "variable" | "list" | "broadcast" | "literal"
 }
 
 function collectSlotDiff(path, refSlot, stuSlot, spriteNameMap, changes) {
@@ -1042,7 +1076,16 @@ function collectSlotDiff(path, refSlot, stuSlot, spriteNameMap, changes) {
   const stuSimple = simpleSlotValue(stuSlot);
   if (refSimple !== null && stuSimple !== null) {
     const normRef = normalizeSlotValue(refSlot, spriteNameMap);
-    if (normRef !== stuSimple) changes.set(path, { ref: refSimple, student: stuSimple });
+    if (normRef !== stuSimple) {
+      changes.set(path, { ref: refSimple, student: stuSimple });
+    } else if (simpleSlotKindLabel(refSlot) !== simpleSlotKindLabel(stuSlot)) {
+      // Same displayed name, different underlying reference (e.g. a "dir"
+      // parameter replaced by a "dir" variable) — label both sides so the
+      // difference survives even though the two sides render identically.
+      const refLabel = simpleSlotKindLabel(refSlot);
+      const stuLabel = simpleSlotKindLabel(stuSlot);
+      changes.set(path, { ref: `${refLabel} "${refSimple}"`, student: `${stuLabel} "${stuSimple}"` });
+    }
     return;
   }
 

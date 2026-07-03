@@ -1139,6 +1139,18 @@
 .sa-diff-line-swapped {
   color: #cdd6f4;
 }
+/* A "change" line whose rendered pseudocode text is identical on both sides —
+   e.g. a procedure's own parameter swapped for a same-named variable — shown
+   via makeSemanticChangeLine/its split-view equivalent instead of a normal
+   red/green word-diff (there are no differing words to highlight). */
+.sa-diff-line-change {
+  color: #f9e2af;
+}
+.sa-diff-semantic-detail {
+  color: #6c7086;
+  font-size: 0.65rem;
+  margin-left: 0.3rem;
+}
 .sa-diff-line-more {
   background: #1e1e2e;
   color: #6c7086;
