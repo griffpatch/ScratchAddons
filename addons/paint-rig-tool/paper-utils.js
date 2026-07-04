@@ -64,9 +64,7 @@ export function deletePivot(group) {
  * @returns {paper.Layer|null}
  */
 export function getPaintLayer(paper) {
-  return (
-    paper.project.layers.find((l) => l.data?.isPaintingLayer && !l.data?.isGuideLayer) ?? null
-  );
+  return paper.project.layers.find((l) => l.data?.isPaintingLayer && !l.data?.isGuideLayer) ?? null;
 }
 
 /**
@@ -102,9 +100,7 @@ export function findAllPaintRootItemsAtPoint(paper, point) {
     fill: true,
     stroke: true,
     tolerance: 4 / paper.view.zoom,
-    match: (r) =>
-      !r.item.data?.isHelperItem &&
-      (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
+    match: (r) => !r.item.data?.isHelperItem && (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
   });
   // Walk each hit up to its direct child of the painting layer, deduplicate.
   const seen = new Set();
@@ -136,9 +132,7 @@ export function findPaintRootItemAtPoint(paper, point) {
     fill: true,
     stroke: true,
     tolerance: 4 / paper.view.zoom,
-    match: (r) =>
-      !r.item.data?.isHelperItem &&
-      (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
+    match: (r) => !r.item.data?.isHelperItem && (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
   });
   if (!hitResult) return null;
   // Walk up to the direct child of the painting layer.
@@ -183,9 +177,7 @@ export function findGroupAtPoint(paper, point) {
     fill: true,
     stroke: true,
     tolerance: 4 / paper.view.zoom,
-    match: (r) =>
-      !r.item.data?.isHelperItem &&
-      (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
+    match: (r) => !r.item.data?.isHelperItem && (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
   });
   if (!hitResult) return null;
   let item = hitResult.item;
@@ -211,9 +203,7 @@ export function findInnermostRigGroupAtPoint(paper, point) {
     fill: true,
     stroke: true,
     tolerance: 4 / paper.view.zoom,
-    match: (r) =>
-      !r.item.data?.isHelperItem &&
-      (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
+    match: (r) => !r.item.data?.isHelperItem && (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
   });
   if (!hitResult) return null;
   // Walk upward from the hit item; return the first (innermost) group with a pivot.
@@ -241,9 +231,7 @@ export function findOutermostRigGroupAtPoint(paper, point) {
     fill: true,
     stroke: true,
     tolerance: 4 / paper.view.zoom,
-    match: (r) =>
-      !r.item.data?.isHelperItem &&
-      (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
+    match: (r) => !r.item.data?.isHelperItem && (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
   });
   if (!hitResult) return null;
   // Walk from hit item up toward the layer, collecting all ancestor groups with pivots.
@@ -281,9 +269,7 @@ export function findInnermostRigGroupUnderPoint(paper, point) {
     fill: true,
     stroke: true,
     tolerance: 4 / paper.view.zoom,
-    match: (r) =>
-      !r.item.data?.isHelperItem &&
-      (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
+    match: (r) => !r.item.data?.isHelperItem && (paintLayer.isAncestor(r.item) || r.item.layer === paintLayer),
   });
 
   let best = null;

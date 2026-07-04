@@ -1731,7 +1731,14 @@ export default async function ({ addon, msg, console }) {
      * used for filter chip grouping. Returns null for cls values with no sub-types.
      */
     getSubTypeKey(block, cls) {
-      if (cls !== "var" && cls !== "VAR" && cls !== "list" && cls !== "LIST" && cls !== "broadcast" && cls !== "define") {
+      if (
+        cls !== "var" &&
+        cls !== "VAR" &&
+        cls !== "list" &&
+        cls !== "LIST" &&
+        cls !== "broadcast" &&
+        cls !== "define"
+      ) {
         return null;
       }
       const opcode = this.getBlockOpcode(block);
@@ -2377,8 +2384,7 @@ export default async function ({ addon, msg, console }) {
           if (idxInFiltered !== -1) {
             this.carousel.idx = idxInFiltered;
             if (this.carousel.count) {
-              this.carousel.count.innerHTML =
-                this.carousel.idx + 1 + " / " + this.carousel.blocks.length;
+              this.carousel.count.innerHTML = this.carousel.idx + 1 + " / " + this.carousel.blocks.length;
             }
           }
           this.carousel.utils.scrollBlockIntoView(block);
@@ -2443,39 +2449,72 @@ export default async function ({ addon, msg, console }) {
       const i = (name) => this._resolveInput(inputs, name, rawBlocks, depth);
 
       switch (opcode) {
-        case "data_variable": return f("VARIABLE");
-        case "data_list": return f("LIST");
-        case "data_itemoflist": return `item ${i("INDEX")} of ${f("LIST")}`;
-        case "data_lengthoflist": return `length of ${f("LIST")}`;
-        case "data_itemnumoflist": return `item # of ${i("ITEM")} in ${f("LIST")}`;
-        case "data_listcontainsitem": return `${f("LIST")} contains ${i("ITEM")}`;
-        case "operator_add": return `(${i("NUM1")} + ${i("NUM2")})`;
-        case "operator_subtract": return `(${i("NUM1")} \u2212 ${i("NUM2")})`;
-        case "operator_multiply": return `(${i("NUM1")} \u00D7 ${i("NUM2")})`;
-        case "operator_divide": return `(${i("NUM1")} / ${i("NUM2")})`;
-        case "operator_mod": return `(${i("NUM1")} mod ${i("NUM2")})`;
-        case "operator_round": return `round ${i("NUM")}`;
-        case "operator_join": return `join ${i("STRING1")} ${i("STRING2")}`;
-        case "operator_letter_of": return `letter ${i("LETTER")} of ${i("STRING")}`;
-        case "operator_length": return `length of ${i("STRING")}`;
-        case "operator_contains": return `${i("STRING1")} contains ${i("STRING2")}`;
-        case "operator_mathop": return `${f("OPERATOR")} of ${i("NUM")}`;
-        case "motion_xposition": return "x";
-        case "motion_yposition": return "y";
-        case "motion_direction": return "direction";
-        case "looks_size": return "size";
-        case "looks_costumenumbername": return f("NUMBER_NAME") === "name" ? "costume name" : "costume #";
-        case "looks_backdropnumbername": return f("NUMBER_NAME") === "name" ? "backdrop name" : "backdrop #";
-        case "sound_volume": return "volume";
-        case "sensing_timer": return "timer";
-        case "sensing_answer": return "answer";
-        case "sensing_loudness": return "loudness";
-        case "sensing_dayssince2000": return "days since 2000";
-        case "sensing_current": return `current ${f("CURRENTMENU").toLowerCase()}`;
-        case "sensing_username": return "username";
-        case "sensing_mousex": return "mouse x";
-        case "sensing_mousey": return "mouse y";
-        case "sensing_distanceto": return `distance to ${i("DISTANCETOMENU")}`;
+        case "data_variable":
+          return f("VARIABLE");
+        case "data_list":
+          return f("LIST");
+        case "data_itemoflist":
+          return `item ${i("INDEX")} of ${f("LIST")}`;
+        case "data_lengthoflist":
+          return `length of ${f("LIST")}`;
+        case "data_itemnumoflist":
+          return `item # of ${i("ITEM")} in ${f("LIST")}`;
+        case "data_listcontainsitem":
+          return `${f("LIST")} contains ${i("ITEM")}`;
+        case "operator_add":
+          return `(${i("NUM1")} + ${i("NUM2")})`;
+        case "operator_subtract":
+          return `(${i("NUM1")} \u2212 ${i("NUM2")})`;
+        case "operator_multiply":
+          return `(${i("NUM1")} \u00D7 ${i("NUM2")})`;
+        case "operator_divide":
+          return `(${i("NUM1")} / ${i("NUM2")})`;
+        case "operator_mod":
+          return `(${i("NUM1")} mod ${i("NUM2")})`;
+        case "operator_round":
+          return `round ${i("NUM")}`;
+        case "operator_join":
+          return `join ${i("STRING1")} ${i("STRING2")}`;
+        case "operator_letter_of":
+          return `letter ${i("LETTER")} of ${i("STRING")}`;
+        case "operator_length":
+          return `length of ${i("STRING")}`;
+        case "operator_contains":
+          return `${i("STRING1")} contains ${i("STRING2")}`;
+        case "operator_mathop":
+          return `${f("OPERATOR")} of ${i("NUM")}`;
+        case "motion_xposition":
+          return "x";
+        case "motion_yposition":
+          return "y";
+        case "motion_direction":
+          return "direction";
+        case "looks_size":
+          return "size";
+        case "looks_costumenumbername":
+          return f("NUMBER_NAME") === "name" ? "costume name" : "costume #";
+        case "looks_backdropnumbername":
+          return f("NUMBER_NAME") === "name" ? "backdrop name" : "backdrop #";
+        case "sound_volume":
+          return "volume";
+        case "sensing_timer":
+          return "timer";
+        case "sensing_answer":
+          return "answer";
+        case "sensing_loudness":
+          return "loudness";
+        case "sensing_dayssince2000":
+          return "days since 2000";
+        case "sensing_current":
+          return `current ${f("CURRENTMENU").toLowerCase()}`;
+        case "sensing_username":
+          return "username";
+        case "sensing_mousex":
+          return "mouse x";
+        case "sensing_mousey":
+          return "mouse y";
+        case "sensing_distanceto":
+          return `distance to ${i("DISTANCETOMENU")}`;
         default:
           return opcode.replace(/^[a-zA-Z]+_/, "");
       }
@@ -2489,26 +2528,46 @@ export default async function ({ addon, msg, console }) {
       const i = (name) => this._resolveInput(inputs, name, rawBlocks);
 
       switch (opcode) {
-        case "data_setvariableto": return `set ${f("VARIABLE")} to ${i("VALUE")}`;
-        case "data_changevariableby": return `change ${f("VARIABLE")} by ${i("VALUE")}`;
-        case "data_variable": return f("VARIABLE");
-        case "data_showvariable": return `show variable ${f("VARIABLE")}`;
-        case "data_hidevariable": return `hide variable ${f("VARIABLE")}`;
-        case "data_addtolist": return `add ${i("ITEM")} to ${f("LIST")}`;
-        case "data_deleteoflist": return `delete ${i("INDEX")} of ${f("LIST")}`;
-        case "data_deletealloflist": return `delete all of ${f("LIST")}`;
-        case "data_insertatlist": return `insert ${i("ITEM")} at ${i("INDEX")} of ${f("LIST")}`;
-        case "data_replaceitemoflist": return `replace item ${i("INDEX")} of ${f("LIST")} with ${i("ITEM")}`;
-        case "data_itemoflist": return `item ${i("INDEX")} of ${f("LIST")}`;
-        case "data_itemnumoflist": return `item # of ${i("ITEM")} in ${f("LIST")}`;
-        case "data_lengthoflist": return `length of ${f("LIST")}`;
-        case "data_listcontainsitem": return `${f("LIST")} contains ${i("ITEM")}`;
-        case "data_showlist": return `show list ${f("LIST")}`;
-        case "data_hidelist": return `hide list ${f("LIST")}`;
-        case "data_list": return f("LIST");
-        case "event_broadcast": return `broadcast ${i("BROADCAST_INPUT")}`;
-        case "event_broadcastandwait": return `broadcast ${i("BROADCAST_INPUT")} and wait`;
-        case "event_whenbroadcastreceived": return `when I receive ${f("BROADCAST_OPTION")}`;
+        case "data_setvariableto":
+          return `set ${f("VARIABLE")} to ${i("VALUE")}`;
+        case "data_changevariableby":
+          return `change ${f("VARIABLE")} by ${i("VALUE")}`;
+        case "data_variable":
+          return f("VARIABLE");
+        case "data_showvariable":
+          return `show variable ${f("VARIABLE")}`;
+        case "data_hidevariable":
+          return `hide variable ${f("VARIABLE")}`;
+        case "data_addtolist":
+          return `add ${i("ITEM")} to ${f("LIST")}`;
+        case "data_deleteoflist":
+          return `delete ${i("INDEX")} of ${f("LIST")}`;
+        case "data_deletealloflist":
+          return `delete all of ${f("LIST")}`;
+        case "data_insertatlist":
+          return `insert ${i("ITEM")} at ${i("INDEX")} of ${f("LIST")}`;
+        case "data_replaceitemoflist":
+          return `replace item ${i("INDEX")} of ${f("LIST")} with ${i("ITEM")}`;
+        case "data_itemoflist":
+          return `item ${i("INDEX")} of ${f("LIST")}`;
+        case "data_itemnumoflist":
+          return `item # of ${i("ITEM")} in ${f("LIST")}`;
+        case "data_lengthoflist":
+          return `length of ${f("LIST")}`;
+        case "data_listcontainsitem":
+          return `${f("LIST")} contains ${i("ITEM")}`;
+        case "data_showlist":
+          return `show list ${f("LIST")}`;
+        case "data_hidelist":
+          return `hide list ${f("LIST")}`;
+        case "data_list":
+          return f("LIST");
+        case "event_broadcast":
+          return `broadcast ${i("BROADCAST_INPUT")}`;
+        case "event_broadcastandwait":
+          return `broadcast ${i("BROADCAST_INPUT")} and wait`;
+        case "event_whenbroadcastreceived":
+          return `when I receive ${f("BROADCAST_OPTION")}`;
         case "procedures_call": {
           const proccode = mutation?.proccode ?? "?";
           const argIds = JSON.parse(mutation?.argumentids ?? "[]");
@@ -2535,15 +2594,22 @@ export default async function ({ addon, msg, console }) {
       const f = (name) => fields?.[name]?.value ?? "?";
 
       switch (opcode) {
-        case "event_whenflagclicked": return "when \uD83C\uDFC1 clicked";
-        case "event_whenkeypressed": return `when ${f("KEY_OPTION")} key pressed`;
-        case "event_whenthisspriteclicked": return "when this sprite clicked";
-        case "event_whenstageclicked": return "when stage clicked";
-        case "event_whenbroadcastreceived": return `when I receive ${f("BROADCAST_OPTION")}`;
-        case "event_whenbackdropswitchesto": return `when backdrop switches to ${f("BACKDROP")}`;
+        case "event_whenflagclicked":
+          return "when \uD83C\uDFC1 clicked";
+        case "event_whenkeypressed":
+          return `when ${f("KEY_OPTION")} key pressed`;
+        case "event_whenthisspriteclicked":
+          return "when this sprite clicked";
+        case "event_whenstageclicked":
+          return "when stage clicked";
+        case "event_whenbroadcastreceived":
+          return `when I receive ${f("BROADCAST_OPTION")}`;
+        case "event_whenbackdropswitchesto":
+          return `when backdrop switches to ${f("BACKDROP")}`;
         case "event_whengreaterthan":
           return `when ${f("WHENGREATERTHANMENU")} > ${this._resolveInput(inputs, "VALUE", rawBlocks)}`;
-        case "control_start_as_clone": return "when I start as a clone";
+        case "control_start_as_clone":
+          return "when I start as a clone";
         case "procedures_definition": {
           const protoId = inputs?.custom_block?.block;
           const proto = protoId ? rawBlocks[protoId] : null;
@@ -2566,9 +2632,7 @@ export default async function ({ addon, msg, console }) {
         [...this.el.querySelectorAll("input[data-sub-type-key]:checked")].map((cb) => cb.dataset.subTypeKey)
       );
       carousel.activeSpriteFilters = new Set(
-        [...this.el.querySelectorAll("input[data-sprite-target-id]:checked")].map(
-          (cb) => cb.dataset.spriteTargetId
-        )
+        [...this.el.querySelectorAll("input[data-sprite-target-id]:checked")].map((cb) => cb.dataset.spriteTargetId)
       );
 
       carousel.applyFilters();

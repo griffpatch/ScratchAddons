@@ -74,7 +74,10 @@ export default async function ({ addon, msg, console }) {
   async function loadImage(file) {
     const img = new Image();
     img.src = URL.createObjectURL(file);
-    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
     URL.revokeObjectURL(img.src);
     return img;
   }
@@ -85,14 +88,29 @@ export default async function ({ addon, msg, console }) {
    */
   function makeSpriteJson(name) {
     return JSON.stringify({
-      name, isStage: false, x: 0, y: 0, visible: true, size: 100,
-      rotationStyle: "all around", direction: 90, draggable: false,
-      currentCostume: 0, blocks: {}, variables: {},
-      costumes: [{
-        name: "costume1", bitmapResolution: 1, rotationCenterX: 0, rotationCenterY: 0,
-        assetId: "cd21514d0531fdffb22204e0ec5ed84a",
-        dataFormat: "svg", md5ext: "cd21514d0531fdffb22204e0ec5ed84a.svg",
-      }],
+      name,
+      isStage: false,
+      x: 0,
+      y: 0,
+      visible: true,
+      size: 100,
+      rotationStyle: "all around",
+      direction: 90,
+      draggable: false,
+      currentCostume: 0,
+      blocks: {},
+      variables: {},
+      costumes: [
+        {
+          name: "costume1",
+          bitmapResolution: 1,
+          rotationCenterX: 0,
+          rotationCenterY: 0,
+          assetId: "cd21514d0531fdffb22204e0ec5ed84a",
+          dataFormat: "svg",
+          md5ext: "cd21514d0531fdffb22204e0ec5ed84a.svg",
+        },
+      ],
       sounds: [],
     });
   }

@@ -171,7 +171,7 @@ class Col {
 /**
  * Find the top block of a stack (the block that would be at the top if stacked vertically).
  * For reporter blocks embedded in other blocks, this walks up to find the containing stack.
- * 
+ *
  * @param {Blockly.Block} block - A block in a stack
  * @returns {Blockly.Block} The topmost block of the stack
  */

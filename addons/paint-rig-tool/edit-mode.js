@@ -1,4 +1,12 @@
-import { findGroupAtPoint, findAllPaintRootItemsAtPoint, findInnermostRigGroupUnderPoint, findPivotItem, createPivotAt, deletePivot, getPaintLayer } from "./paper-utils.js";
+import {
+  findGroupAtPoint,
+  findAllPaintRootItemsAtPoint,
+  findInnermostRigGroupUnderPoint,
+  findPivotItem,
+  createPivotAt,
+  deletePivot,
+  getPaintLayer,
+} from "./paper-utils.js";
 
 // Screen-space radius (px) within which a click counts as hitting a pivot handle.
 const PIVOT_HIT_PX = 12;

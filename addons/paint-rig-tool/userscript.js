@@ -46,15 +46,11 @@ export default async function ({ addon, msg }) {
   // mode-selector mounts so canvas / container refs are always current.
   const toolsLoop = async () => {
     while (true) {
-      const modeSelector = await addon.tab.waitForElement(
-        "[class*='paint-editor_mode-selector_']",
-        {
-          markAsSeen: true,
-          reduxCondition: (state) =>
-            state.scratchGui.editorTab.activeTabIndex === 1 &&
-            !state.scratchGui.mode.isPlayerOnly,
-        }
-      );
+      const modeSelector = await addon.tab.waitForElement("[class*='paint-editor_mode-selector_']", {
+        markAsSeen: true,
+        reduxCondition: (state) =>
+          state.scratchGui.editorTab.activeTabIndex === 1 && !state.scratchGui.mode.isPlayerOnly,
+      });
 
       // Deactivate any leftover session.
       if (rigTool?.isActive) rigTool.deactivate({ restoreMode: false });
@@ -65,9 +61,7 @@ export default async function ({ addon, msg }) {
       const selectedBtn = modeSelector.querySelector("[class*='is-selected']");
       if (anyBtn) btn.className = anyBtn.className;
       if (anyIcon) icon.className = anyIcon.className;
-      isSelectedClass = selectedBtn
-        ? ([...selectedBtn.classList].find((c) => c.includes("is-selected")) ?? "")
-        : "";
+      isSelectedClass = selectedBtn ? [...selectedBtn.classList].find((c) => c.includes("is-selected")) ?? "" : "";
       if (isSelectedClass) btn.classList.remove(isSelectedClass);
 
       const isBitmap = () => {

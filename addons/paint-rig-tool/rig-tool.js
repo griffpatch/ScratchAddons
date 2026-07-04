@@ -58,17 +58,8 @@ export class RigTool {
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     if (this._addon.self.disabled) return;
 
-    this._overlay = new RigOverlay(
-      this._canvasContainer,
-      this._canvas,
-      this._paper,
-      this._addon
-    );
-    this._toolbar = new RigSecondaryToolbar(
-      this._canvasContainer,
-      this._msg,
-      (mode) => this._setMode(mode)
-    );
+    this._overlay = new RigOverlay(this._canvasContainer, this._canvas, this._paper, this._addon);
+    this._toolbar = new RigSecondaryToolbar(this._canvasContainer, this._msg, (mode) => this._setMode(mode));
 
     // Start in edit mode so the user can define pivot points first.
     this._setMode("edit");
@@ -119,8 +110,7 @@ export class RigTool {
       overlay: this._overlay,
       onChanged: () => this._triggerUpdate(),
     };
-    this._mode =
-      modeName === "edit" ? new EditMode(opts) : modeName === "ik" ? new IKMode(opts) : new MoveMode(opts);
+    this._mode = modeName === "edit" ? new EditMode(opts) : modeName === "ik" ? new IKMode(opts) : new MoveMode(opts);
     this._mode.activate();
     this._overlay.render();
   }

@@ -274,7 +274,9 @@
 }
 
 @keyframes sa-ss-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /*
@@ -286,7 +288,7 @@
   border: 1.5px solid currentColor;
   border-top-color: transparent;
   border-radius: 50%;
-  content: '';
+  content: "";
   display: inline-block;
   height: 10px;
   margin-right: 5px;
@@ -374,7 +376,9 @@
   font-size: 0.7rem;
   line-height: 1;
   padding: 1px 5px;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .sa-ss-anchor-toggle:hover {
@@ -413,7 +417,9 @@
   height: 14px;
   margin: auto;
   padding: 0;
-  transition: background 0.15s, transform 0.1s;
+  transition:
+    background 0.15s,
+    transform 0.1s;
   width: 14px;
 }
 
@@ -477,12 +483,8 @@
   color: var(--editorDarkMode-selector-text, inherit);
 }
 
-
-
 .sa-ss-btn-primary {
   background: var(--editorDarkMode-primary, hsla(260, 60%, 60%, 1));
   color: var(--editorDarkMode-primary-text, #fff);
   font-weight: 600;
 }
-
-

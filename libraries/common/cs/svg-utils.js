@@ -11,7 +11,7 @@
 export function collectTransforms(svgElement, blockCanvas) {
   const transforms = [];
   let currentGroup = svgElement.parentElement;
-  
+
   while (currentGroup && currentGroup !== blockCanvas) {
     const transform = currentGroup.getAttribute("transform");
     if (transform) {
@@ -19,7 +19,7 @@ export function collectTransforms(svgElement, blockCanvas) {
     }
     currentGroup = currentGroup.parentElement;
   }
-  
+
   return transforms;
 }
 
@@ -32,10 +32,10 @@ export function collectTransforms(svgElement, blockCanvas) {
 export function createTransformedGroup(transforms, className) {
   const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
   group.setAttribute("class", className);
-  
+
   if (transforms.length > 0) {
     group.setAttribute("transform", transforms.join(" "));
   }
-  
+
   return group;
 }
