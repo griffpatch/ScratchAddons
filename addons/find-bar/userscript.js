@@ -1,9 +1,34 @@
-import BlockItem from "./blockly/BlockItem.js";
+﻿import BlockItem from "./blockly/BlockItem.js";
 import BlockInstance from "./blockly/BlockInstance.js";
 import Utils from "./blockly/Utils.js";
+import { getTopBlocks } from "../../libraries/common/cs/devtools-utils.js";
+import * as BlockTypes from "./blockTypes.js";
 
+/**
+ * Find Bar addon for Scratch editor that provides search functionality for blocks, variables,
+ * broadcasts, procedures, costumes, and sounds. Supports navigation through search results
+ * with keyboard shortcuts and visual carousel controls.
+ *
+ * Features:
+ * - Search across current sprite or all sprites
+ * - Keyboard shortcuts (Ctrl+F to open, Arrow keys to navigate)
+ * - Visual carousel for navigating multiple instances
+ * - Middle-click or Shift+click on blocks to explore related items
+ * - Dropdown with categorized results and usage counts
+ * - Real-time filtering as you type
+ *
+ * @param {import("../../addon-api/content-script/typedef").UserscriptUtilities} options - Userscript utilities object
+ * @returns {Promise<void>} Resolves when the find bar is initialized and ready
+ */
 export default async function ({ addon, msg, console }) {
   const Blockly = await addon.tab.traps.getBlockly();
+
+  // When "explore blocks" is enabled, disable jump-to-definition
+  Object.defineProperty(Blockly.Gesture.prototype, "exploreBlocks", {
+    get() {
+      return !addon.self.disabled;
+    },
+  });
 
   class FindBar {
     constructor() {
@@ -14,8 +39,11 @@ export default async function ({ addon, msg, console }) {
       this.findBarOuter = null;
       this.findWrapper = null;
       this.findInput = null;
+      this.allSpritesCheckbox = null;
       this.dropdownOut = null;
-      this.dropdown = new Dropdown(this.utils);
+      this.navControls = null;
+      this.clearButton = null;
+      this.dropdown = new Dropdown(this.utils, this);
 
       document.addEventListener("keydown", (e) => this.eventKeyDown(e), true);
     }
@@ -36,7 +64,10 @@ export default async function ({ addon, msg, console }) {
       this.dropdownOut = this.findWrapper.appendChild(document.createElement("label"));
       this.dropdownOut.className = "sa-find-dropdown-out";
 
-      this.findInput = this.dropdownOut.appendChild(document.createElement("input"));
+      let inputWrap = this.dropdownOut.appendChild(document.createElement("div"));
+      inputWrap.className = "sa-find-input-wrap";
+
+      this.findInput = inputWrap.appendChild(document.createElement("input"));
       this.findInput.className = addon.tab.scratchClass("input_input-form", {
         others: "sa-find-input",
       });
@@ -45,15 +76,138 @@ export default async function ({ addon, msg, console }) {
       this.findInput.type = "search";
       this.findInput.placeholder = msg("find-placeholder");
       this.findInput.autocomplete = "off";
+      this.currentSearchValue = ""; // Track search value for text block filtering
+
+      // Create the "all sprites" checkbox
+      this.allSpritesCheckbox = inputWrap.appendChild(document.createElement("input"));
+      this.allSpritesCheckbox.type = "checkbox";
+      this.allSpritesCheckbox.className = "sa-find-all-sprites-checkbox";
+      this.allSpritesCheckbox.checked = true; // Enabled by default
+      this.allSpritesCheckbox.title = msg("all-sprites-tooltip");
+      this.allSpritesCheckbox.addEventListener("mousedown", (e) => {
+        // Prevent the default behavior that would blur the input
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      this.allSpritesCheckbox.addEventListener("click", (e) => {
+        e.stopPropagation();
+      });
+      this.allSpritesCheckbox.addEventListener("change", (e) => {
+        const wasVisible = this.dropdownOut.classList.contains("visible");
+
+        // Save carousel state first (before it gets cleared)
+        const hadCarousel = this.navControls.style.display === "inline-block";
+        const currentBlockInstance =
+          hadCarousel && this.dropdown.carousel.blocks.length > 0
+            ? this.dropdown.carousel.blocks[this.dropdown.carousel.idx]
+            : null;
+
+        // Save the currently selected carousel item info (from the carousel, not dropdown.selected)
+        const oldSelectedItem = hadCarousel ? this.dropdown.carousel.selectedItem : null;
+        const oldSelectedID = oldSelectedItem ? oldSelectedItem.data.labelID : null;
+        const oldSelectedEventName = oldSelectedItem ? oldSelectedItem.data.eventName : null;
+        const oldSelectedCls = oldSelectedItem ? oldSelectedItem.data.cls : null;
+
+        const searchValue = this.findInput.value;
+
+        if (wasVisible) {
+          // Dropdown is open - regenerate the list
+          this.prevValue = null;
+          this.rebuildDropdownItems();
+          // Note: Don't re-open the dropdown here. If it was open, it will remain open
+          // via the "visible" class that was already set. Re-adding the class can cause
+          // race conditions with focus/blur handling and the outside-click close handler.
+        } else {
+          // Dropdown is closed - rebuild the list silently
+          this.prevValue = null;
+          this.rebuildDropdownItems();
+        }
+
+        // If carousel was active, recalculate it with new scope (BEFORE applying search filter)
+        if (hadCarousel && oldSelectedItem) {
+          // Find the item in the new list
+          let newSelectedItem = null;
+          for (const item of this.dropdown.items) {
+            // For broadcasts, match by eventName (since labelID changes per sprite)
+            if (
+              oldSelectedCls === "broadcast" &&
+              item.data.cls === "broadcast" &&
+              oldSelectedEventName &&
+              item.data.eventName === oldSelectedEventName
+            ) {
+              newSelectedItem = item;
+              break;
+            }
+            // For everything else, match by labelID
+            else if (item.data.labelID === oldSelectedID) {
+              newSelectedItem = item;
+              break;
+            }
+          }
+
+          if (newSelectedItem) {
+            // Found the item - rebuild carousel with new scope
+            this.dropdown.selected = newSelectedItem;
+            newSelectedItem.classList.add("sel");
+            this.dropdown.onItemClick(newSelectedItem, currentBlockInstance);
+          } else {
+            // Item not found - clear the carousel
+            this.clearNavigation();
+          }
+        }
+
+        // Reapply the search filter AFTER carousel recalculation
+        if (searchValue) {
+          this.inputChange();
+        }
+
+        // Focus input if dropdown was open
+        if (wasVisible) {
+          this.findInput.focus();
+        }
+      });
 
       this.dropdownOut.appendChild(this.dropdown.createDom());
+
+      // Prevent clicks inside dropdown from closing it
+      this.dropdownOut.addEventListener("mousedown", (e) => {
+        // Allow clicks on input and checkbox to work normally
+        if (e.target === this.findInput || e.target === this.allSpritesCheckbox) {
+          return;
+        }
+        // Allow clicks on items to work normally (they have their own handlers)
+        // Prevent blur for everything else (headings, empty space, scrollbar)
+        if (!e.target.closest("li") || e.target.closest(".sa-find-heading")) {
+          e.preventDefault();
+        }
+      });
+
+      // Create navigation controls container (hidden by default)
+      this.navControls = this.findBarOuter.appendChild(document.createElement("span"));
+      this.navControls.className = "sa-find-nav-controls";
+      this.navControls.style.display = "none";
+
+      // Create selected item label (hidden by default)
+      this.selectedLabel = this.findBarOuter.appendChild(document.createElement("span"));
+      this.selectedLabel.className = "sa-find-selected-label";
+      this.selectedLabel.style.display = "none";
+
+      // Create clear button (hidden by default)
+      this.clearButton = this.findBarOuter.appendChild(document.createElement("button"));
+      this.clearButton.className = "sa-find-clear-btn";
+      this.clearButton.textContent = "✕";
+      this.clearButton.title = "Clear selection and navigation";
+      this.clearButton.style.display = "none";
+      this.clearButton.addEventListener("click", () => this.clearNavigation());
 
       this.bindEvents();
       this.tabChanged();
     }
 
     bindEvents() {
-      this.findInput.addEventListener("focus", () => this.inputChange());
+      this.findInput.addEventListener("focus", () => {
+        this.inputChange();
+      });
       this.findInput.addEventListener("keydown", (e) => this.inputKeyDown(e));
       this.findInput.addEventListener("keyup", () => this.inputChange());
       this.findInput.addEventListener("focusout", () => this.hideDropDown());
@@ -68,50 +222,215 @@ export default async function ({ addon, msg, console }) {
       this.findBarOuter.hidden = !visible;
     }
 
-    inputChange() {
-      this.showDropDown();
+    /**
+     * Smart match that handles camel case and space-separated tokens.
+     * Each token in the search (separated by spaces or camelCase) must match the start of a word
+     * (after space/start) or a capital letter after a lowercase letter.
+     * @param {string} searchText - The search query (space-separated tokens)
+     * @param {string} targetText - The text to search in
+     * @returns {Array|null} Array of match positions [{start, length}] or null if no match
+     */
+    /**
+     * Simpler text matching for text blocks - case-insensitive substring match that respects word boundaries.
+     * Matches "and th" with "this and then" but not "brand thing".
+     * @param {string} searchText - The search query
+     * @param {string} targetText - The text to search in
+     * @returns {Array|null} Array of match positions [{start, length}] or null if no match
+     */
+    textMatch(searchText, targetText) {
+      if (!searchText) return [];
 
-      // Filter the list...
-      let val = (this.findInput.value || "").toLowerCase();
-      if (val === this.prevValue) {
-        // No change so don't re-filter
-        return;
+      const searchLower = searchText.toLowerCase();
+      const targetLower = targetText.toLowerCase();
+      const matches = [];
+
+      // Find all occurrences of the search text
+      let searchPos = 0;
+      while (searchPos < targetText.length) {
+        const idx = targetLower.indexOf(searchLower, searchPos);
+        if (idx === -1) break;
+
+        // Check if this is at a word boundary (start of string or after space/punctuation)
+        const isWordStart =
+          idx === 0 ||
+          targetText[idx - 1] === " " ||
+          targetText[idx - 1] === "_" ||
+          /[^a-zA-Z0-9]/.test(targetText[idx - 1]);
+
+        if (isWordStart) {
+          matches.push({ start: idx, length: searchText.length });
+          // Only return the first match for highlighting
+          return matches;
+        }
+
+        searchPos = idx + 1;
       }
-      this.prevValue = val;
 
-      this.dropdown.blocks = null;
+      return matches.length > 0 ? matches : null;
+    }
 
+    smartMatch(searchText, targetText) {
+      // Split by spaces first, then split camelCase within each token
+      const rawTokens = searchText.split(/\s+/).filter((t) => t.length > 0);
+      const tokens = [];
+
+      for (const rawToken of rawTokens) {
+        // Split camelCase only at lowercase->uppercase boundaries: "gD" becomes ["g", "D"], "HEAD" stays ["HEAD"]
+        const camelSplit = rawToken.split(/(?<=[a-z])(?=[A-Z])/).filter((t) => t.length > 0);
+        tokens.push(...camelSplit.map((t) => t.toLowerCase()));
+      }
+
+      if (tokens.length === 0) return [];
+
+      const targetLower = targetText.toLowerCase();
+      const matches = [];
+      let searchPos = 0;
+
+      for (const token of tokens) {
+        let found = false;
+
+        // Search for token starting at searchPos
+        for (let i = searchPos; i < targetText.length; i++) {
+          // Check if this position is a valid word start
+          const isWordStart =
+            i === 0 || // Start of string
+            targetText[i - 1] === " " || // After space
+            targetText[i - 1] === "_" || // After underscore
+            (i > 0 &&
+              targetText[i - 1] >= "a" &&
+              targetText[i - 1] <= "z" &&
+              targetText[i] >= "A" &&
+              targetText[i] <= "Z"); // Camel case boundary
+
+          if (isWordStart) {
+            // Check if token matches at this position
+            const matchesHere = targetLower.substr(i, token.length) === token;
+            if (matchesHere) {
+              matches.push({ start: i, length: token.length });
+              searchPos = i + token.length;
+              found = true;
+              break;
+            }
+          }
+        }
+
+        if (!found) {
+          return null; // Token not found, no match
+        }
+      }
+
+      return matches;
+    }
+
+    applyFilter(val) {
       // Hide items in list that do not contain filter text
       let listLI = this.dropdown.items;
+      const headingVisibility = new Map(); // Track which headings have visible items
+
       for (const li of listLI) {
         let procCode = li.data.procCode;
-        let i = li.data.lower.indexOf(val);
-        if (i >= 0) {
-          li.style.display = "block";
-          while (li.firstChild) {
-            li.removeChild(li.firstChild);
+        // Use simpler substring matching for text blocks
+        const matches = li.data.cls === "text" ? this.textMatch(val, procCode) : this.smartMatch(val, procCode);
+
+        if (matches !== null) {
+          li.style.display = "flex";
+
+          const textSpan = li.querySelector(".sa-find-item-text");
+          if (textSpan) {
+            while (textSpan.firstChild) {
+              textSpan.removeChild(textSpan.firstChild);
+            }
+
+            // Build the highlighted text
+            if (matches.length > 0) {
+              let lastEnd = 0;
+
+              for (const match of matches) {
+                // Add text before this match
+                if (match.start > lastEnd) {
+                  textSpan.appendChild(document.createTextNode(procCode.substring(lastEnd, match.start)));
+                }
+
+                // Add highlighted match
+                let bText = document.createElement("b");
+                bText.appendChild(document.createTextNode(procCode.substr(match.start, match.length)));
+                textSpan.appendChild(bText);
+
+                lastEnd = match.start + match.length;
+              }
+
+              // Add remaining text after last match
+              if (lastEnd < procCode.length) {
+                textSpan.appendChild(document.createTextNode(procCode.substr(lastEnd)));
+              }
+            } else {
+              // No search term, just show the text as-is
+              textSpan.appendChild(document.createTextNode(procCode));
+            }
           }
-          if (i > 0) {
-            li.appendChild(document.createTextNode(procCode.substring(0, i)));
-          }
-          let bText = document.createElement("b");
-          bText.appendChild(document.createTextNode(procCode.substr(i, val.length)));
-          li.appendChild(bText);
-          if (i + val.length < procCode.length) {
-            li.appendChild(document.createTextNode(procCode.substr(i + val.length)));
+
+          // Mark this item's heading as having visible items
+          if (li.groupHeading) {
+            headingVisibility.set(li.groupHeading, true);
           }
         } else {
           li.style.display = "none";
         }
       }
+
+      // Hide headings that have no visible items
+      const allHeadings = this.dropdown.el.querySelectorAll(".sa-find-heading");
+      for (const heading of allHeadings) {
+        heading.style.display = headingVisibility.get(heading) ? "flex" : "none";
+      }
     }
 
-    inputKeyDown(e) {
-      this.dropdown.inputKeyDown(e);
+    inputChange() {
+      // Always show dropdown when typing
+      this.showDropDown();
+
+      // Filter the list...
+      let val = this.findInput.value || "";
+      if (val === this.prevValue) {
+        // No change so don't re-filter
+        return;
+      }
+
+      // Check if we need to rebuild dropdown due to text block threshold
+      const oldIncludeText = this.currentSearchValue.length >= 3;
+      const newIncludeText = val.length >= 3;
+      if (oldIncludeText !== newIncludeText) {
+        // Threshold crossed - rebuild dropdown
+        this.currentSearchValue = val;
+        this.prevValue = null; // Force rebuild
+        this.rebuildDropdownItems();
+      }
+
+      this.prevValue = val;
+      this.currentSearchValue = val;
+
+      // Don't clear navigation - keep carousel active when dropdown opens
+      // this.clearNavigation();
+
+      this.dropdown.blocks = null;
+
+      this.applyFilter(val);
+    }
+
+    async inputKeyDown(e) {
+      this.dropdown.inputKeyDown(e, this);
 
       // Enter
       if (e.key === "Enter") {
-        this.findInput.blur();
+        // Close dropdown and focus editor, keep carousel active
+        this.dropdownOut.classList.remove("visible");
+        this.findInput.blur(); // This focuses the editor panel
+
+        let focusTarget = await addon.tab.waitForElement("svg.blocklySvg");
+        focusTarget?.focus();
+
+        e.preventDefault();
+        e.stopPropagation();
         return;
       }
 
@@ -126,6 +445,42 @@ export default async function ({ addon, msg, console }) {
         e.preventDefault();
         return;
       }
+    }
+
+    /**
+     * @param {HtmlElement} selectedItem
+     * @param {Carousel} carousel
+     */
+    showNavigation(selectedItem, carousel) {
+      // Show the selected item label
+      this.selectedLabel.textContent = selectedItem.data.procCode;
+      this.selectedLabel.style.display = "inline-block";
+
+      // Move carousel to navigation area
+      this.navControls.innerHTML = "";
+      this.navControls.appendChild(carousel.el);
+      this.navControls.style.display = "inline-block";
+
+      // Trigger flash animation by removing and re-adding the element to restart CSS animation
+      void this.navControls.offsetWidth; // Force reflow to restart animation
+      this.navControls.style.animation = "none";
+      setTimeout(() => {
+        this.navControls.style.animation = "";
+      }, 10);
+
+      // Show the clear button
+      this.clearButton.style.display = "inline-block";
+    }
+
+    clearNavigation() {
+      // Clear the navigation controls
+      this.selectedLabel.style.display = "none";
+      this.navControls.innerHTML = "";
+      this.navControls.style.display = "none";
+      this.clearButton.style.display = "none";
+
+      // Remove the carousel from dropdown if it exists
+      this.dropdown.carousel.remove();
     }
 
     eventKeyDown(e) {
@@ -192,18 +547,10 @@ export default async function ({ addon, msg, console }) {
       }
     }
 
-    showDropDown(focusID, instanceBlock) {
-      if (!focusID && this.dropdownOut.classList.contains("visible")) {
-        return;
-      }
-
-      // special '' vs null... - null forces a reevaluation
-      this.prevValue = focusID ? "" : null; // Clear the previous value of the input search
-
-      this.dropdownOut.classList.add("visible");
+    rebuildDropdownItems(focusID, instanceBlock, forceAllSprites = false) {
       let scratchBlocks =
         this.selectedTab === 0
-          ? this.getScratchBlocks()
+          ? this.getScratchBlocks(forceAllSprites)
           : this.selectedTab === 1
             ? this.getScratchCostumes()
             : this.selectedTab === 2
@@ -212,23 +559,73 @@ export default async function ({ addon, msg, console }) {
 
       this.dropdown.empty();
 
+      // Add items with group headings
+      let lastGroup = null;
+      const groupMap = {
+        broadcast: "broadcasts",
+        event: "events",
+        "clone-hat": "clones",
+        "clone-delete": "clones",
+        "clone-create": "clones",
+        define: "define",
+        VAR: "variables-global",
+        var: "variables-local",
+        LIST: "lists-global",
+        list: "lists-local",
+        costume: "costumes",
+        sound: "sounds",
+        text: "text",
+      };
+
+      let selectedItem = null;
       for (const proc of scratchBlocks) {
+        const currentGroup = groupMap[proc.cls];
+        if (currentGroup !== lastGroup && currentGroup) {
+          this.dropdown.addHeading(msg("group-" + currentGroup));
+          lastGroup = currentGroup;
+        }
+
         let item = this.dropdown.addItem(proc);
 
         if (focusID) {
           if (proc.matchesID(focusID)) {
-            this.dropdown.onItemClick(item, instanceBlock);
+            selectedItem = item;
           } else {
             item.style.display = "none";
           }
         }
       }
 
-      this.utils.offsetX = this.dropdownOut.getBoundingClientRect().width + 32;
-      this.utils.offsetY = 32;
+      // Calculate counts for all items (only when not filtering to a specific item)
+      if (!focusID) {
+        this.dropdown.calculateCounts();
+      }
+
+      return selectedItem;
+    }
+
+    showDropDown(focusID, instanceBlock, skipDropdownOpen, forceAllSprites = false) {
+      if (!focusID && this.dropdownOut.classList.contains("visible")) {
+        return;
+      }
+
+      // special '' vs null... - null forces a reevaluation
+      this.prevValue = focusID ? "" : null; // Clear the previous value of the input search
+
+      // Only open dropdown if not skipping
+      if (!skipDropdownOpen) {
+        this.dropdownOut.classList.add("visible");
+      }
+
+      const selectedItem = this.rebuildDropdownItems(focusID, instanceBlock, forceAllSprites);
+
+      if (selectedItem) {
+        this.dropdown.onItemClick(selectedItem, instanceBlock);
+      }
     }
 
     hideDropDown() {
+      // Just hide the dropdown, don't do anything with carousel
       this.dropdownOut.classList.remove("visible");
     }
 
@@ -236,129 +633,488 @@ export default async function ({ addon, msg, console }) {
       return addon.tab.redux.state.scratchGui.editorTab.activeTabIndex;
     }
 
-    getScratchBlocks() {
-      let myBlocks = [];
-      let myBlocksByProcCode = {};
+    /**
+     * Retrieves and categorizes all Scratch blocks from the current workspace and optionally other sprites.
+     * Uses a single-pass algorithm to collect all block usage information while traversing ordered top blocks.
+     * This efficiently preserves the natural left-to-right, top-to-bottom ordering of blocks.
+     *
+     * @param {boolean} forceAllSprites - If true, search all sprites regardless of checkbox state
+     * @returns {BlockItem[]} Array of BlockItem objects representing different types of Scratch blocks,
+     *                       sorted by category (events, broadcasts, definitions, variables, lists) and then
+     *                       alphabetically by name, with position as final sort criteria
+     *
+     * @see BlockItem - The class used to represent individual blocks
+     * @see this.allSpritesCheckbox - Checkbox that determines search scope (current sprite vs all sprites)
+     * @see this.workspace - The Blockly workspace containing the blocks
+     */
+    getScratchBlocks(forceAllSprites = false) {
+      const searchAllSprites = forceAllSprites || (this.allSpritesCheckbox ? this.allSpritesCheckbox.checked : true);
+      const includeTextBlocks = this.currentSearchValue && this.currentSearchValue.length >= 3;
 
-      let topBlocks = this.workspace.getTopBlocks();
+      // Collections for tracking unique items and their usages
+      const itemsByKey = new Map(); // Key -> BlockItem
+      const variableUsages = new Map(); // Variable ID -> Array of blocks
+      const procedureUsages = new Map(); // Proc code -> Array of blocks
+      const eventUsages = new Map(); // Event description or broadcast name -> Array of blocks (combines broadcasts and events)
+      const cloneHatBlocks = []; // "when I start as clone" hat blocks
+      const cloneDeleteBlocks = []; // "delete this clone" blocks
+      const cloneCreateBySprite = new Map(); // Sprite name -> Array of "create clone of" blocks
+      const textBlockUsages = new Map(); // Text content -> Array of text blocks
 
       /**
-       * @param cls
-       * @param txt
-       * @param root
-       * @returns BlockItem
+       * Helper to add a block to a map, initializing the array if needed
        */
-      function addBlock(cls, txt, root) {
-        let id = root.id ? root.id : root.getId ? root.getId() : null;
-        let clone = myBlocksByProcCode[txt];
-        if (clone) {
-          if (!clone.clones) {
-            clone.clones = [];
+      const addToMap = (map, key, block) => {
+        if (!map.has(key)) {
+          map.set(key, []);
+        }
+        map.get(key).push(block);
+      };
+
+      /**
+       * Format a procedure code by replacing %s and %b placeholders with nicer representations
+       */
+      const formatProcCode = (procCode) => {
+        if (!procCode) return procCode;
+
+        // Replace %s (string/number input) with a placeholder in parentheses
+        // Replace %b (boolean input) with a diamond placeholder
+        let formatted = procCode.replace(/%s/g, "()").replace(/%b/g, "<>");
+
+        return formatted;
+      };
+
+      /**
+       * Helper to add or update a block item
+       */
+      const addOrUpdateItem = (cls, txt, blockOrInstance, eventName = null) => {
+        const key = `${cls}:${txt}`;
+        let item = itemsByKey.get(key);
+
+        if (!item) {
+          const id = blockOrInstance.id || blockOrInstance.getId?.() || null;
+          item = new BlockItem(cls, txt, id, 0);
+          item.y = blockOrInstance.getRelativeToSurfaceXY?.()?.y || blockOrInstance.y || null;
+          if (eventName) item.eventName = eventName;
+          itemsByKey.set(key, item);
+        } else {
+          // Clone detected
+          const id = blockOrInstance.id || blockOrInstance.getId?.() || null;
+          if (!item.clones) item.clones = [];
+          item.clones.push(id);
+        }
+
+        return item;
+      };
+
+      /**
+       * Get block description for event blocks
+       */
+      const getBlockDescription = (block) => {
+        const opcode = block.opcode || block.type;
+
+        if (opcode === "event_whenflagclicked") {
+          return msg("when-flag-clicked", { flag: msg("/_general/blocks/green-flag") });
+        }
+        if (opcode === "event_whenkeypressed") {
+          const key =
+            block.fields?.KEY_OPTION?.value ||
+            block.inputList?.[0].fieldRow.find((f) => f.name === "KEY_OPTION")?.getText() ||
+            "";
+          return msg("when-key-pressed", { key });
+        }
+        if (opcode === "event_whenthisspriteclicked") {
+          return msg("when-this-sprite-clicked");
+        }
+        if (opcode === "event_whenstageclicked") {
+          return msg("when-stage-clicked");
+        }
+        if (opcode === "event_whenbackdropswitchesto") {
+          const backdrop = block.fields?.BACKDROP?.value || "";
+          return msg("when-backdrop-switches", { backdrop });
+        }
+        if (opcode === "event_whengreaterthan") {
+          const option = block.fields?.WHENGREATERTHANMENU?.value || "";
+          return msg("when-greater-than", { option });
+        }
+        if (opcode === "control_start_as_clone") {
+          return msg("when-i-start-as-clone");
+        }
+
+        // Fallback for Blockly blocks
+        if (block.inputList) {
+          let fields = block.inputList[0];
+          let desc = "";
+          for (const fieldRow of fields.fieldRow) {
+            desc = desc ? desc + " " : "";
+            if (fieldRow instanceof Blockly.FieldImage && fieldRow.getValue().endsWith("green-flag.svg")) {
+              desc += msg("/_general/blocks/green-flag");
+            } else {
+              desc += fieldRow.getText();
+            }
           }
-          clone.clones.push(id);
-          return clone;
+          return desc;
         }
-        let items = new BlockItem(cls, txt, id, 0);
-        items.y = root.getRelativeToSurfaceXY ? root.getRelativeToSurfaceXY().y : null;
-        myBlocks.push(items);
-        myBlocksByProcCode[txt] = items;
-        return items;
-      }
 
-      function getDescFromField(root) {
-        let fields = root.inputList[0];
-        let desc;
-        for (const fieldRow of fields.fieldRow) {
-          desc = desc ? desc + " " : "";
-          if (fieldRow instanceof Blockly.FieldImage && fieldRow.getValue().endsWith("green-flag.svg")) {
-            desc += msg("/_general/blocks/green-flag");
-          } else {
-            desc += fieldRow.getText();
+        return opcode;
+      };
+
+      /**
+       * Process a single block and collect all relevant information
+       */
+      const processBlock = (block, target = null) => {
+        const isBlockly = !!block.type; // Blockly blocks have .type, JSON blocks have .opcode
+        const blockType = isBlockly ? block.type : block.opcode;
+
+        // Handle top-level event blocks
+        if (isBlockly) {
+          // Create BlockInstance for current sprite's blocks to ensure they remain valid when switching sprites
+          const blockRef = target ? new BlockInstance(target, { id: block.id }) : block;
+
+          if (blockType === "procedures_definition") {
+            const label = block.getChildren()[0];
+            const procCode = label?.getProcCode();
+            if (procCode) {
+              const formattedProcCode = formatProcCode(procCode);
+              addOrUpdateItem("define", formattedProcCode, block);
+              addToMap(procedureUsages, procCode, blockRef);
+            }
+          } else if (blockType === "event_whenbroadcastreceived") {
+            const fieldRow = block.inputList[0].fieldRow;
+            const eventName = fieldRow.find((input) => input.name === "BROADCAST_OPTION")?.getText();
+            if (eventName) {
+              addOrUpdateItem("broadcast", eventName, block, eventName);
+              addToMap(eventUsages, eventName, blockRef);
+            }
+          } else if (blockType.substr(0, 10) === "event_when") {
+            const desc = getBlockDescription(block);
+            addOrUpdateItem("event", desc, block);
+            addToMap(eventUsages, desc, blockRef);
+          } else if (blockType === "control_start_as_clone") {
+            // Add to clone hat blocks collection
+            cloneHatBlocks.push(blockRef);
+          }
+        } else {
+          // JSON block from another sprite
+          const blockInstance = new BlockInstance(target, block);
+
+          if (blockType === "event_whenbroadcastreceived") {
+            const eventName = block.fields.BROADCAST_OPTION.value;
+            addOrUpdateItem("broadcast", eventName, blockInstance, eventName);
+            addToMap(eventUsages, eventName, blockInstance);
+          } else if (blockType.startsWith("event_when")) {
+            const desc = getBlockDescription(block);
+            addOrUpdateItem("event", desc, blockInstance);
+            addToMap(eventUsages, desc, blockInstance);
+          } else if (blockType === "control_start_as_clone") {
+            // Add to clone hat blocks collection
+            cloneHatBlocks.push(blockInstance);
           }
         }
-        return desc;
-      }
 
-      for (const root of topBlocks) {
-        if (root.type === "procedures_definition") {
-          const label = root.getChildren()[0];
-          const procCode = label.getProcCode();
-          if (!procCode) {
-            continue;
+        // Collect variable/list/procedure/broadcast usages from descendants
+        if (isBlockly) {
+          const descendants = block.getDescendants();
+          for (const descendant of descendants) {
+            // Create BlockInstance for current sprite's blocks to ensure they remain valid when switching sprites
+            const blockRef = target ? new BlockInstance(target, { id: descendant.id }) : descendant;
+
+            // Variables and lists
+            const blockVariables = descendant.getVarModels?.();
+            if (blockVariables) {
+              for (const blockVar of blockVariables) {
+                const varId = blockVar.getId();
+                addToMap(variableUsages, varId, blockRef);
+              }
+            }
+
+            // Procedure calls
+            if (descendant.type === "procedures_call") {
+              const procCode = descendant.getProcCode();
+              if (procCode) {
+                addToMap(procedureUsages, procCode, blockRef);
+              }
+            }
+
+            // Broadcast sends
+            if (descendant.type === "event_broadcast" || descendant.type === "event_broadcastandwait") {
+              const broadcastInput = descendant.getChildren()[0];
+              if (broadcastInput) {
+                let eventName;
+                if (broadcastInput.type === "event_broadcast_menu") {
+                  eventName = broadcastInput.inputList[0].fieldRow[0].getText();
+                } else {
+                  eventName = msg("complex-broadcast");
+                }
+                addToMap(eventUsages, eventName, blockRef);
+              }
+            }
+
+            // Collect text blocks if enabled
+            if (includeTextBlocks && descendant.type === "text") {
+              const textField = descendant.getField("TEXT");
+              if (textField) {
+                const textValue = textField.getValue();
+                if (textValue) {
+                  addToMap(textBlockUsages, textValue, blockRef);
+                }
+              }
+            }
+
+            // Handle clone-related blocks
+            if (descendant.type === "control_delete_this_clone") {
+              cloneDeleteBlocks.push(blockRef);
+            } else if (descendant.type === "control_create_clone_of") {
+              // Get the sprite being cloned
+              const cloneInput = descendant.getChildren()[0];
+              if (cloneInput && cloneInput.type === "control_create_clone_of_menu") {
+                const field = cloneInput.inputList?.[0]?.fieldRow?.[0];
+                let spriteName = field?.getText?.() || field?.value_ || null;
+
+                // Handle "myself" - resolve to actual sprite name
+                if (spriteName === "_myself_" || spriteName === "myself") {
+                  const currentTarget = target || this.utils.getEditingTarget();
+                  spriteName = currentTarget.getName();
+                }
+
+                // Track by actual sprite name
+                if (spriteName) {
+                  addToMap(cloneCreateBySprite, spriteName, blockRef);
+                }
+              }
+            }
           }
-          const indexOfLabel = root.inputList.findIndex((i) => i.fieldRow.length > 0);
-          if (indexOfLabel === -1) {
-            continue;
+        } else {
+          // For JSON blocks from other sprites, we need to manually traverse the block tree
+          const traverseJSONBlock = (jsonBlock, currentTarget) => {
+            // Check for variable/list usage
+            if (jsonBlock.fields) {
+              for (const fieldName of Object.keys(jsonBlock.fields)) {
+                const field = jsonBlock.fields[fieldName];
+                if (field.id) {
+                  // This field references a variable or list
+                  addToMap(variableUsages, field.id, new BlockInstance(currentTarget, jsonBlock));
+                }
+              }
+            }
+
+            // Procedures (custom blocks) are always local to the current sprite.
+            // Do NOT include procedure calls from other sprites in the usages map,
+            // regardless of the global "all sprites" checkbox state.
+            // Intentionally skipping jsonBlock.opcode === "procedures_call" here.
+
+            // Check for broadcast sends
+            if (jsonBlock.opcode === "event_broadcast" || jsonBlock.opcode === "event_broadcastandwait") {
+              if (jsonBlock.inputs && jsonBlock.inputs.BROADCAST_INPUT) {
+                const broadcastInputId = jsonBlock.inputs.BROADCAST_INPUT.block;
+                const broadcastInputBlock = currentTarget.blocks._blocks[broadcastInputId];
+                if (broadcastInputBlock) {
+                  let eventName;
+                  if (broadcastInputBlock.opcode === "event_broadcast_menu") {
+                    eventName = broadcastInputBlock.fields.BROADCAST_OPTION.value;
+                  } else {
+                    eventName = msg("complex-broadcast");
+                  }
+                  addToMap(eventUsages, eventName, new BlockInstance(currentTarget, jsonBlock));
+                }
+              }
+            }
+
+            // Collect text blocks if enabled
+            if (includeTextBlocks && jsonBlock.opcode === "text") {
+              const textField = jsonBlock.fields?.TEXT;
+              if (textField && textField.value) {
+                addToMap(textBlockUsages, textField.value, new BlockInstance(currentTarget, jsonBlock));
+              }
+            }
+
+            // Handle clone-related blocks
+            if (jsonBlock.opcode === "control_delete_this_clone") {
+              cloneDeleteBlocks.push(new BlockInstance(currentTarget, jsonBlock));
+            } else if (jsonBlock.opcode === "control_create_clone_of") {
+              // Get the sprite being cloned
+              if (jsonBlock.inputs && jsonBlock.inputs.CLONE_OPTION) {
+                const cloneInputId = jsonBlock.inputs.CLONE_OPTION.block;
+                const cloneInputBlock = currentTarget.blocks._blocks[cloneInputId];
+                if (cloneInputBlock && cloneInputBlock.opcode === "control_create_clone_of_menu") {
+                  let spriteName = cloneInputBlock.fields?.CLONE_OPTION?.value;
+
+                  // Handle "myself" - resolve to actual sprite name
+                  if (spriteName === "_myself_" || spriteName === "myself") {
+                    spriteName = currentTarget.getName();
+                  }
+
+                  // Track by actual sprite name
+                  if (spriteName) {
+                    addToMap(cloneCreateBySprite, spriteName, new BlockInstance(currentTarget, jsonBlock));
+                  }
+                }
+              }
+            }
+
+            // Traverse child blocks
+            if (jsonBlock.inputs) {
+              for (const inputName of Object.keys(jsonBlock.inputs)) {
+                const input = jsonBlock.inputs[inputName];
+                if (input.block) {
+                  const childBlock = currentTarget.blocks._blocks[input.block];
+                  if (childBlock) {
+                    traverseJSONBlock(childBlock, currentTarget);
+                  }
+                }
+              }
+            }
+
+            // Traverse next block in stack
+            if (jsonBlock.next) {
+              const nextBlock = currentTarget.blocks._blocks[jsonBlock.next];
+              if (nextBlock) {
+                traverseJSONBlock(nextBlock, currentTarget);
+              }
+            }
+          };
+
+          traverseJSONBlock(block, target);
+        }
+      };
+
+      // Process all sprites in order (including current sprite)
+      const runtime = addon.tab.traps.vm.runtime;
+      const currentTargetID = this.utils.getEditingTarget().id;
+
+      // Get sprites to process (current sprite only, or all sprites)
+      const spritesToProcess = searchAllSprites
+        ? runtime.targets.filter((t) => t.isOriginal)
+        : [this.utils.getEditingTarget()];
+
+      for (const target of spritesToProcess) {
+        // For current sprite, use Blockly workspace for better API access
+        if (target.id === currentTargetID) {
+          const topBlocks = getTopBlocks(this.workspace);
+          for (const topBlock of topBlocks) {
+            processBlock(topBlock, target);
           }
-          const translatedDefine = root.inputList[indexOfLabel].fieldRow[0].getText();
-          const message = indexOfLabel === 0 ? `${translatedDefine} ${procCode}` : `${procCode} ${translatedDefine}`;
-          addBlock("define", message, root);
-          continue;
-        }
+        } else {
+          // For other sprites, use JSON blocks
+          const blocks = target.blocks;
+          if (!blocks._blocks) continue;
 
-        if (root.type === "event_whenflagclicked") {
-          addBlock("flag", getDescFromField(root), root); // "When Flag Clicked"
-          continue;
-        }
+          // Get ordered top blocks for this sprite
+          const topBlockIds = Object.keys(blocks._blocks)
+            .filter((id) => {
+              const block = blocks._blocks[id];
+              return block.topLevel === true;
+            })
+            .sort((a, b) => {
+              const blockA = blocks._blocks[a];
+              const blockB = blocks._blocks[b];
+              const xDiff = (blockA.x || 0) - (blockB.x || 0);
+              if (Math.abs(xDiff) > 256) return xDiff;
+              return (blockA.y || 0) - (blockB.y || 0);
+            });
 
-        if (root.type === "event_whenbroadcastreceived") {
-          const fieldRow = root.inputList[0].fieldRow;
-          let eventName = fieldRow.find((input) => input.name === "BROADCAST_OPTION").getText();
-          addBlock("receive", msg("event", { name: eventName }), root).eventName = eventName;
-
-          continue;
-        }
-
-        if (root.type.substr(0, 10) === "event_when") {
-          addBlock("event", getDescFromField(root), root); // "When Flag Clicked"
-          continue;
-        }
-
-        if (root.type === "control_start_as_clone") {
-          addBlock("event", getDescFromField(root), root); // "when I start as a clone"
-          continue;
+          for (const blockId of topBlockIds) {
+            processBlock(blocks._blocks[blockId], target);
+          }
         }
       }
 
-      let map = this.workspace.getVariableMap();
+      // Add variables and lists
+      const map = this.workspace.getVariableMap();
+      const vars = map.getVariablesOfType("");
+      for (const varModel of vars) {
+        const varId = varModel.getId();
+        const usages = variableUsages.get(varId) || [];
 
-      let vars = map.getVariablesOfType("");
-      for (const row of vars) {
-        addBlock(
-          row.isLocal ? "var" : "VAR",
-          row.isLocal ? msg("var-local", { name: row.name }) : msg("var-global", { name: row.name }),
-          row
-        );
+        // Skip global variables not used in current sprite when searching current only
+        if (!searchAllSprites && !varModel.isLocal && usages.length === 0) {
+          continue;
+        }
+
+        addOrUpdateItem(varModel.isLocal ? "var" : "VAR", varModel.name, varModel);
       }
 
-      let lists = map.getVariablesOfType("list");
-      for (const row of lists) {
-        addBlock(
-          row.isLocal ? "list" : "LIST",
-          row.isLocal ? msg("list-local", { name: row.name }) : msg("list-global", { name: row.name }),
-          row
-        );
+      const lists = map.getVariablesOfType("list");
+      for (const listModel of lists) {
+        const listId = listModel.getId();
+        const usages = variableUsages.get(listId) || [];
+
+        // Skip global lists not used in current sprite when searching current only
+        if (!searchAllSprites && !listModel.isLocal && usages.length === 0) {
+          continue;
+        }
+
+        addOrUpdateItem(listModel.isLocal ? "list" : "LIST", listModel.name, listModel);
       }
 
-      const events = this.getCallsToEvents();
-      for (const event of events) {
-        addBlock("receive", msg("event", { name: event.eventName }), event.block).eventName = event.eventName;
+      // Add text blocks if enabled
+      if (includeTextBlocks) {
+        for (const [textValue, blocks] of textBlockUsages.entries()) {
+          // Limit text display length to 50 characters
+          const displayText = textValue.length > 50 ? textValue.substring(0, 50) + "..." : textValue;
+          const textItem = new BlockItem("text", `"${displayText}"`, null, 0);
+          textItem.textValue = textValue; // Store original for matching
+          textItem.y = null;
+          itemsByKey.set(`text:${textValue}`, textItem);
+        }
       }
 
-      const clsOrder = { flag: 0, receive: 1, event: 2, define: 3, var: 4, VAR: 5, list: 6, LIST: 7 };
+      // Create clone items
+      // 1. Single "when I start as clone" entry (even when global)
+      if (cloneHatBlocks.length > 0) {
+        const cloneHatItem = new BlockItem("clone-hat", msg("when-i-start-as-clone"), null, 0);
+        cloneHatItem.y = null;
+        itemsByKey.set("clone-hat:when-i-start-as-clone", cloneHatItem);
+      }
+
+      // 2. Single "delete this clone" entry (even when global)
+      if (cloneDeleteBlocks.length > 0) {
+        const cloneDeleteItem = new BlockItem("clone-delete", msg("delete-this-clone"), null, 0);
+        cloneDeleteItem.y = null;
+        itemsByKey.set("clone-delete:delete-this-clone", cloneDeleteItem);
+      }
+
+      // 3. Multiple "create clone of {sprite}" entries
+      for (const [spriteName, blocks] of cloneCreateBySprite.entries()) {
+        const itemText = msg("create-clone-of-sprite", { sprite: spriteName });
+        const cloneCreateItem = new BlockItem("clone-create", itemText, null, 0);
+        cloneCreateItem.targetSprite = spriteName;
+        cloneCreateItem.y = null;
+        itemsByKey.set(`clone-create:${spriteName}`, cloneCreateItem);
+      }
+
+      // Store usage data on the dropdown for later retrieval (replaces multiple passes)
+      // No need to sort - blocks are already in order from traversing sorted topBlocks
+      this.dropdown._cachedVariableUsages = variableUsages;
+      this.dropdown._cachedProcedureUsages = procedureUsages;
+      this.dropdown._cachedEventUsages = eventUsages; // Contains both broadcasts and other events
+      this.dropdown._cachedCloneHatBlocks = cloneHatBlocks;
+      this.dropdown._cachedCloneDeleteBlocks = cloneDeleteBlocks;
+      this.dropdown._cachedCloneCreateBySprite = cloneCreateBySprite;
+      this.dropdown._cachedTextBlockUsages = textBlockUsages;
+
+      // Convert map to array and sort
+      const myBlocks = Array.from(itemsByKey.values());
+      const clsOrder = {
+        event: 0,
+        broadcast: 1,
+        "clone-hat": 2,
+        "clone-delete": 2,
+        "clone-create": 2,
+        define: 3,
+        var: 4,
+        VAR: 5,
+        list: 6,
+        LIST: 7,
+        text: 8,
+      };
 
       myBlocks.sort((a, b) => {
-        let t = clsOrder[a.cls] - clsOrder[b.cls];
-        if (t !== 0) {
-          return t;
-        }
-        if (a.lower < b.lower) {
-          return -1;
-        }
-        if (a.lower > b.lower) {
-          return 1;
-        }
-        return a.y - b.y;
+        const t = clsOrder[a.cls] - clsOrder[b.cls];
+        if (t !== 0) return t;
+        if (a.lower < b.lower) return -1;
+        if (a.lower > b.lower) return 1;
+        return (a.y || 0) - (b.y || 0);
       });
 
       return myBlocks;
@@ -425,17 +1181,71 @@ export default async function ({ addon, msg, console }) {
   }
 
   class Dropdown {
-    constructor(utils) {
+    constructor(utils, findBar) {
+      /** @type {Utils} */
       this.utils = utils;
+      this.findBar = findBar;
 
       this.el = null;
       this.items = [];
       this.selected = null;
-      this.carousel = new Carousel(this.utils);
+      this.carousel = new Carousel(this.utils, findBar);
     }
 
     get workspace() {
       return addon.tab.traps.getWorkspace();
+    }
+
+    /**
+     * Sort blocks by position (left to right, top to bottom) for tidy navigation.
+     * Works with both Blockly.Block objects and BlockInstance objects.
+     * @param {Array} blocks - Array of blocks or BlockInstance objects
+     * @returns {Array} Sorted array
+     */
+    sortBlocksByPosition(blocks) {
+      const runtime = addon.tab.traps.vm.runtime;
+
+      return blocks.sort((a, b) => {
+        let posA, posB;
+
+        // Handle Blockly.Block objects (have getRelativeToSurfaceXY method)
+        if (a.getRelativeToSurfaceXY) {
+          posA = a.getRelativeToSurfaceXY();
+        } else if (a.targetId) {
+          // Handle BlockInstance objects - need to look up the block from target
+          const target = runtime.targets.find((t) => t.id === a.targetId);
+          if (target && target.blocks._blocks && target.blocks._blocks[a.id]) {
+            const blockData = target.blocks._blocks[a.id];
+            posA = { x: blockData.x || 0, y: blockData.y || 0 };
+          } else {
+            posA = { x: 0, y: 0 };
+          }
+        } else {
+          posA = { x: 0, y: 0 };
+        }
+
+        if (b.getRelativeToSurfaceXY) {
+          posB = b.getRelativeToSurfaceXY();
+        } else if (b.targetId) {
+          const target = runtime.targets.find((t) => t.id === b.targetId);
+          if (target && target.blocks._blocks && target.blocks._blocks[b.id]) {
+            const blockData = target.blocks._blocks[b.id];
+            posB = { x: blockData.x || 0, y: blockData.y || 0 };
+          } else {
+            posB = { x: 0, y: 0 };
+          }
+        } else {
+          posB = { x: 0, y: 0 };
+        }
+
+        // Sort by x first (left to right), then by y (top to bottom)
+        const xDiff = posA.x - posB.x;
+        if (Math.abs(xDiff) > 256) {
+          // Same tolerance as getTopBlocks
+          return xDiff;
+        }
+        return posA.y - posB.y;
+      });
     }
 
     createDom() {
@@ -444,7 +1254,7 @@ export default async function ({ addon, msg, console }) {
       return this.el;
     }
 
-    inputKeyDown(e) {
+    inputKeyDown(e, findBar) {
       // Up Arrow
       if (e.key === "ArrowUp") {
         this.navigateFilter(-1);
@@ -459,15 +1269,8 @@ export default async function ({ addon, msg, console }) {
         return;
       }
 
-      // Enter
-      if (e.key === "Enter") {
-        // Any selected on enter? if not select now
-        if (this.selected) {
-          this.navigateFilter(1);
-        }
-        e.preventDefault();
-        return;
-      }
+      // Enter is now handled by FindBar.inputKeyDown
+      // So we don't consume it here anymore
 
       this.carousel.inputKeyDown(e);
     }
@@ -480,7 +1283,7 @@ export default async function ({ addon, msg, console }) {
         nxt = this.items[0];
         dir = 1;
       }
-      while (nxt && nxt.style.display === "none") {
+      while (nxt && (nxt.style.display === "none" || nxt.isHeading)) {
         nxt = dir === -1 ? nxt.previousSibling : nxt.nextSibling;
       }
       if (nxt) {
@@ -489,13 +1292,37 @@ export default async function ({ addon, msg, console }) {
       }
     }
 
+    addHeading(text) {
+      const heading = document.createElement("li");
+      heading.innerText = text;
+      heading.className = "sa-find-heading";
+      heading.isHeading = true;
+      heading.itemsInGroup = []; // Track items in this group
+      this.el.appendChild(heading);
+      this.currentHeading = heading; // Track current heading for items
+      return heading;
+    }
+
     addItem(proc) {
       const item = document.createElement("li");
-      item.innerText = proc.procCode;
+
+      const textSpan = document.createElement("span");
+      textSpan.className = "sa-find-item-text";
+      textSpan.innerText = proc.procCode;
+      item.appendChild(textSpan);
+
+      const countSpan = document.createElement("span");
+      countSpan.className = "sa-find-item-count";
+      countSpan.innerText = ""; // Will be filled by calculateCounts
+      item.appendChild(countSpan);
+
       item.data = proc;
       const colorIds = {
-        receive: "events",
+        broadcast: "events",
         event: "events",
+        "clone-hat": "control",
+        "clone-delete": "control",
+        "clone-create": "control",
         define: "more",
         var: "data",
         VAR: "data",
@@ -503,9 +1330,13 @@ export default async function ({ addon, msg, console }) {
         LIST: "data-lists",
         costume: "looks",
         sound: "sounds",
+        text: "operators",
       };
-      if (proc.cls === "flag") {
-        item.className = "sa-find-flag";
+
+      // Special case: flag events get green color (operators)
+      const flagText = msg("when-flag-clicked", { flag: msg("/_general/blocks/green-flag") });
+      if (proc.cls === "event" && proc.procCode === flagText) {
+        item.className = "sa-block-color sa-block-color-operators";
       } else {
         const colorId = colorIds[proc.cls];
         item.className = `sa-block-color sa-block-color-${colorId}`;
@@ -516,9 +1347,69 @@ export default async function ({ addon, msg, console }) {
         e.cancelBubble = true;
         return false;
       });
+
+      // Associate item with current heading
+      if (this.currentHeading) {
+        this.currentHeading.itemsInGroup.push(item);
+        item.groupHeading = this.currentHeading;
+      }
+
       this.items.push(item);
       this.el.appendChild(item);
       return item;
+    }
+
+    calculateCounts() {
+      const searchAllSprites = this.isSearchingAllSprites();
+
+      for (const item of this.items) {
+        const countSpan = item.querySelector(".sa-find-item-count");
+        if (!countSpan) continue;
+
+        const cls = item.data.cls;
+        let count;
+
+        if (cls === "costume" || cls === "sound") {
+          // No count for costumes/sounds
+          countSpan.innerText = "";
+          continue;
+        } else if (cls === "text") {
+          // Get text block count
+          const textValue = item.data.textValue || item.data.procCode.replace(/^"|"$/g, "");
+          count = (this._cachedTextBlockUsages?.get(textValue) || []).length;
+        } else if (cls === "var" || cls === "VAR" || cls === "list" || cls === "LIST") {
+          if (cls === "VAR" || cls === "LIST") {
+            // Global variable/list
+            if (searchAllSprites) {
+              count = this.getGlobalVariableUsesById(item.data.labelID).length;
+            } else {
+              count = this.getVariableUsesById(item.data.labelID).length;
+            }
+          } else {
+            // Local variable/list
+            count = this.getVariableUsesById(item.data.labelID).length;
+          }
+        } else if (cls === "define") {
+          count = this.getCallsToProcedureById(item.data.labelID).length;
+        } else if (cls === "broadcast") {
+          count = this.getBroadcastBlocks(item.data.eventName, searchAllSprites).length;
+        } else if (cls === "event") {
+          count = this.getEventBlocks(item.data.procCode, searchAllSprites).length;
+        } else if (cls === "clone-hat") {
+          count = (this._cachedCloneHatBlocks || []).length;
+        } else if (cls === "clone-delete") {
+          count = (this._cachedCloneDeleteBlocks || []).length;
+        } else if (cls === "clone-create") {
+          const spriteName = item.data.targetSprite;
+          count = (this._cachedCloneCreateBySprite?.get(spriteName) || []).length;
+        } else if (item.data.clones) {
+          count = 1 + item.data.clones.length;
+        } else {
+          count = 1;
+        }
+
+        countSpan.innerText = count > 0 ? `${count}` : "";
+      }
     }
 
     onItemClick(item, instanceBlock) {
@@ -531,6 +1422,7 @@ export default async function ({ addon, msg, console }) {
         this.selected = item;
       }
 
+      const searchAllSprites = this.isSearchingAllSprites();
       let cls = item.data.cls;
       if (cls === "costume" || cls === "sound") {
         // Viewing costumes/sounds - jump to selected costume/sound
@@ -550,14 +1442,41 @@ export default async function ({ addon, msg, console }) {
           wrapper.scrollTop = 0;
         }
       } else if (cls === "var" || cls === "VAR" || cls === "list" || cls === "LIST") {
-        // Search now for all instances
-        let blocks = this.getVariableUsesById(item.data.labelID);
+        // Search for all instances - global variables search across all sprites
+        let blocks;
+        if (cls === "VAR" || cls === "LIST") {
+          // Global variable/list - search across all sprites (or current if checkbox unchecked)
+          if (searchAllSprites) {
+            blocks = this.getGlobalVariableUsesById(item.data.labelID);
+          } else {
+            blocks = this.getVariableUsesById(item.data.labelID);
+          }
+          if (!instanceBlock) {
+            // Try to start with the first block on 'this' sprite
+            const currentTargetID = this.utils.getEditingTarget().id;
+            for (const block of blocks) {
+              if (block.targetId === currentTargetID) {
+                instanceBlock = block;
+                break;
+              }
+            }
+          }
+        } else {
+          // Local variable/list - only current sprite
+          blocks = this.getVariableUsesById(item.data.labelID);
+        }
         this.carousel.build(item, blocks, instanceBlock);
       } else if (cls === "define") {
         let blocks = this.getCallsToProcedureById(item.data.labelID);
+        if (!instanceBlock) {
+          // Default to the definition block itself so the carousel starts there, not at the first call.
+          // item.data.labelID is the definition block's ID and it is always present in the blocks array.
+          const defId = item.data.labelID;
+          instanceBlock = blocks.find((b) => (b.id || b.getId?.()) === defId) || null;
+        }
         this.carousel.build(item, blocks, instanceBlock);
-      } else if (cls === "receive") {
-        let blocks = this.getCallsToEventsByName(item.data.eventName);
+      } else if (cls === "broadcast") {
+        let blocks = this.getBroadcastBlocks(item.data.eventName, searchAllSprites);
         if (!instanceBlock) {
           // Can we start by selecting the first block on 'this' sprite
           const currentTargetID = this.utils.getEditingTarget().id;
@@ -569,6 +1488,33 @@ export default async function ({ addon, msg, console }) {
           }
         }
         this.carousel.build(item, blocks, instanceBlock);
+      } else if (cls === "event") {
+        // Get all matching event blocks (from all sprites if searchAllSprites is true)
+        let blocks = this.getEventBlocks(item.data.procCode, searchAllSprites);
+        if (!instanceBlock) {
+          const currentTargetID = this.utils.getEditingTarget().id;
+          for (const block of blocks) {
+            if (block.targetId === currentTargetID) {
+              instanceBlock = block;
+              break;
+            }
+          }
+        }
+        this.carousel.build(item, blocks, instanceBlock);
+      } else if (cls === "clone-hat") {
+        let blocks = this._cachedCloneHatBlocks || [];
+        this.carousel.build(item, blocks, instanceBlock);
+      } else if (cls === "clone-delete") {
+        let blocks = this._cachedCloneDeleteBlocks || [];
+        this.carousel.build(item, blocks, instanceBlock);
+      } else if (cls === "clone-create") {
+        const spriteName = item.data.targetSprite;
+        let blocks = this._cachedCloneCreateBySprite?.get(spriteName) || [];
+        this.carousel.build(item, blocks, instanceBlock);
+      } else if (cls === "text") {
+        const textValue = item.data.textValue || item.data.procCode.replace(/^"|"$/g, "");
+        let blocks = this._cachedTextBlockUsages?.get(textValue) || [];
+        this.carousel.build(item, blocks, instanceBlock);
       } else if (item.data.clones) {
         let blocks = [this.workspace.getBlockById(item.data.labelID)];
         for (const cloneID of item.data.clones) {
@@ -576,150 +1522,517 @@ export default async function ({ addon, msg, console }) {
         }
         this.carousel.build(item, blocks, instanceBlock);
       } else {
-        this.utils.scrollBlockIntoView(item.data.labelID);
-        this.carousel.remove();
+        // Single item - still show carousel with count of 1
+        let blocks = [this.workspace.getBlockById(item.data.labelID)];
+        this.carousel.build(item, blocks, instanceBlock);
       }
     }
 
     getVariableUsesById(id) {
-      let uses = [];
+      // Use cached data from the single-pass collection
+      return this._cachedVariableUsages?.get(id) || [];
+    }
 
-      let topBlocks = this.workspace.getTopBlocks();
-      for (const topBlock of topBlocks) {
-        /** @type {!Array<!Blockly.Block>} */
-        let kids = topBlock.getDescendants();
-        for (const block of kids) {
-          /** @type {!Array<!Blockly.VariableModel>} */
-          let blockVariables = block.getVarModels();
-          if (blockVariables) {
-            for (const blockVar of blockVariables) {
-              if (blockVar.getId() === id) {
-                uses.push(block);
-              }
-            }
-          }
-        }
-      }
+    isSearchingAllSprites() {
+      return this.findBar.allSpritesCheckbox ? this.findBar.allSpritesCheckbox.checked : true;
+    }
 
-      return uses;
+    getGlobalVariableUsesById(id) {
+      // Use cached data - already sorted during collection
+      return this._cachedVariableUsages?.get(id) || [];
     }
 
     getCallsToProcedureById(id) {
+      // Use cached data from the single-pass collection
       let procBlock = this.workspace.getBlockById(id);
+      if (!procBlock) return [];
+
       let label = procBlock.getChildren()[0];
-      let procCode = label.getProcCode();
+      let procCode = label?.getProcCode();
+      if (!procCode) return [];
 
-      let uses = [procBlock]; // Definition First, then calls to it
-      let topBlocks = this.workspace.getTopBlocks();
-      for (const topBlock of topBlocks) {
-        /** @type {!Array<!Blockly.Block>} */
-        let kids = topBlock.getDescendants();
-        for (const block of kids) {
-          if (block.type === "procedures_call") {
-            if (block.getProcCode() === procCode) {
-              uses.push(block);
-            }
-          }
-        }
-      }
-
-      return uses;
+      return this._cachedProcedureUsages?.get(procCode) || [];
     }
 
-    getCallsToEventsByName(name) {
-      let uses = []; // Definition First, then calls to it
+    getBlockDescription(block) {
+      if (block.opcode === "event_whenflagclicked") {
+        // Construct the full description to match what getDescFromField produces
+        return msg("when-flag-clicked", { flag: msg("/_general/blocks/green-flag") });
+      }
 
-      const runtime = addon.tab.traps.vm.runtime;
-      const targets = runtime.targets; // The sprites / stage
+      if (block.opcode === "event_whenkeypressed") {
+        const key = block.fields.KEY_OPTION ? block.fields.KEY_OPTION.value : "";
+        return msg("when-key-pressed", { key: key });
+      }
 
-      for (const target of targets) {
-        if (!target.isOriginal) {
-          continue; // Skip clones
-        }
+      if (block.opcode === "event_whenthisspriteclicked") {
+        return msg("when-this-sprite-clicked");
+      }
 
-        const blocks = target.blocks;
-        if (!blocks._blocks) {
-          continue;
-        }
+      if (block.opcode === "event_whenstageclicked") {
+        return msg("when-stage-clicked");
+      }
 
-        for (const id of Object.keys(blocks._blocks)) {
-          const block = blocks._blocks[id];
-          if (
-            block.opcode === "event_whenbroadcastreceived" &&
-            block.fields.BROADCAST_OPTION.value.toLowerCase() === name.toLowerCase()
-          ) {
-            uses.push(new BlockInstance(target, block));
-          } else if (block.opcode === "event_broadcast" || block.opcode === "event_broadcastandwait") {
-            const broadcastInputBlockId = block.inputs.BROADCAST_INPUT.block;
-            const broadcastInputBlock = blocks._blocks[broadcastInputBlockId];
-            if (broadcastInputBlock) {
-              let eventName;
-              if (broadcastInputBlock.opcode === "event_broadcast_menu") {
-                eventName = broadcastInputBlock.fields.BROADCAST_OPTION.value;
-              } else {
-                eventName = msg("complex-broadcast");
-              }
-              if (eventName.toLowerCase() === name.toLowerCase()) {
-                uses.push(new BlockInstance(target, block));
-              }
-            }
+      if (block.opcode === "event_whenbackdropswitchesto") {
+        const backdrop = block.fields.BACKDROP ? block.fields.BACKDROP.value : "";
+        return msg("when-backdrop-switches", { backdrop: backdrop });
+      }
+
+      if (block.opcode === "event_whengreaterthan") {
+        const option = block.fields.WHENGREATERTHANMENU ? block.fields.WHENGREATERTHANMENU.value : "";
+        return msg("when-greater-than", { option: option });
+      }
+
+      if (block.opcode === "control_start_as_clone") {
+        return msg("when-i-start-as-clone");
+      }
+
+      // Fallback: extract field values
+      let desc = "";
+      if (block.fields) {
+        for (const fieldName of Object.keys(block.fields)) {
+          const field = block.fields[fieldName];
+          if (field.value) {
+            desc += (desc ? " " : "") + field.value;
           }
         }
       }
+      return desc || block.opcode;
+    }
 
-      return uses;
+    getBroadcastBlocks(name, searchAllSprites = true) {
+      // Use cached data from the single-pass collection (already sorted)
+      // Broadcasts are now stored in eventUsages map alongside other events
+      return this._cachedEventUsages?.get(name) || [];
+    }
+
+    getEventBlocks(eventDesc, searchAllSprites = true) {
+      // Use cached data from the single-pass collection (already sorted)
+      return this._cachedEventUsages?.get(eventDesc) || [];
+    }
+
+    getBlocksForItem(item) {
+      let cls = item.data.cls;
+
+      if (cls === "costume" || cls === "sound") {
+        // No navigation for costumes/sounds
+        return null;
+      } else if (cls === "var" || cls === "VAR" || cls === "list" || cls === "LIST") {
+        return this.getVariableUsesById(item.data.labelID);
+      } else if (cls === "define") {
+        return this.getCallsToProcedureById(item.data.labelID);
+      } else if (cls === "broadcast") {
+        return this.getBroadcastBlocks(item.data.eventName);
+      } else if (cls === "event") {
+        return this.getEventBlocks(item.data.procCode);
+      } else if (cls === "text") {
+        const textValue = item.data.textValue || item.data.procCode.replace(/^"|"$/g, "");
+        return this._cachedTextBlockUsages?.get(textValue) || [];
+      } else if (item.data.clones) {
+        let blocks = [this.workspace.getBlockById(item.data.labelID)];
+        for (const cloneID of item.data.clones) {
+          blocks.push(this.workspace.getBlockById(cloneID));
+        }
+        return blocks;
+      } else {
+        // Single block with no navigation
+        return [this.workspace.getBlockById(item.data.labelID)];
+      }
     }
 
     empty() {
-      for (const item of this.items) {
-        if (this.el.contains(item)) {
-          this.el.removeChild(item);
-        }
+      // Clear all children (including headings and items)
+      while (this.el.firstChild) {
+        this.el.removeChild(this.el.firstChild);
       }
       this.items = [];
       this.selected = null;
+      this.currentHeading = null;
     }
   }
 
   class Carousel {
-    constructor(utils) {
+    constructor(utils, findBar) {
+      /** @type {Utils} */
       this.utils = utils;
+      /** @type {FindBar} */
+      this.findBar = findBar;
 
       this.el = null;
       this.count = null;
       this.blocks = [];
       this.idx = 0;
+      this.selectedItem = null;
+      this.isDirty = false;
+      this._suppressDirty = false;
+      this._suppressTimer = null;
+      this.workspaceChangeListener = null;
+      this.currentTargetId = null;
+      this.forceAllSprites = false; // Track if this carousel was built with forceAllSprites
+      this.cloneFilterContext = null; // Store clone filtering context: { targetSpriteId, targetSpriteName }
+      this.highlighter = new BlockHighlighter(findBar.utils.addon);
+      this.spriteNotification = null; // Element for showing sprite switch notifications
+      this.notificationTimeout = null; // Timeout for hiding notification
+      this.allBlocks = []; // Unfiltered block list
+      this.activeSubTypeFilters = new Set(); // Empty = no filtering; non-empty = only these sub-types
+      this.activeSpriteFilters = new Set(); // Empty = no filtering; non-empty = only these targetIds
+      this.infoPanel = new CarouselInfoPanel(this);
     }
 
-    build(item, blocks, instanceBlock) {
-      if (this.el && this.el.parentNode === item) {
-        // Same control... click again to go to next
+    /**
+     * Filter clone blocks to only those related to a specific sprite
+     * @param {Array} allBlocks - All clone-related blocks
+     * @param {string} targetSpriteId - The sprite ID to filter for
+     * @returns {Array} Filtered blocks
+     */
+    filterCloneBlocksBySprite(allBlocks, targetSpriteId) {
+      const runtime = addon.tab.traps.vm.runtime;
+
+      return allBlocks.filter((b) => {
+        const bTargetId = b.targetId || this.findBar.utils.getEditingTarget().id;
+
+        // Keep clone hats on the target sprite
+        if (bTargetId === targetSpriteId) return true;
+
+        // Keep "create clone of" blocks that target this sprite
+        const actualBlock = b.getBlock?.() || runtime.targets.find((t) => t.id === bTargetId)?.blocks._blocks?.[b.id];
+        if (actualBlock?.opcode === "control_create_clone_of" || actualBlock?.type === "control_create_clone_of") {
+          const cloneInput = actualBlock.inputs?.CLONE_OPTION;
+          if (cloneInput) {
+            const menuBlock = runtime.targets.find((t) => t.id === bTargetId)?.blocks._blocks?.[cloneInput.block];
+            const clonedSpriteName = menuBlock?.fields?.CLONE_OPTION?.value;
+            if (clonedSpriteName === "myself") {
+              return bTargetId === targetSpriteId;
+            } else if (clonedSpriteName) {
+              const clonedSprite = runtime.targets.find((t) => t.getName() === clonedSpriteName && t.isOriginal);
+              return clonedSprite?.id === targetSpriteId;
+            }
+          }
+        }
+        return false;
+      });
+    }
+
+    /** Returns the opcode/type string for any block (Blockly.Block or BlockInstance). */
+    getBlockOpcode(block) {
+      if (block.type) return block.type; // Blockly.Block
+      const runtime = addon.tab.traps.vm.runtime;
+      const target = runtime.targets.find((t) => t.id === block.targetId);
+      return target?.blocks._blocks?.[block.id]?.opcode ?? null;
+    }
+
+    /** Returns the target ID for any block (Blockly.Block or BlockInstance). */
+    getBlockTargetId(block) {
+      return block.targetId ?? this.utils.getEditingTarget().id;
+    }
+
+    /**
+     * Returns the sub-type key for a block within a given carousel item cls,
+     * used for filter chip grouping. Returns null for cls values with no sub-types.
+     */
+    getSubTypeKey(block, cls) {
+      if (cls !== "var" && cls !== "VAR" && cls !== "list" && cls !== "LIST" && cls !== "broadcast" && cls !== "define") {
+        return null;
+      }
+      const opcode = this.getBlockOpcode(block);
+      if (!opcode) return null;
+      if (cls === "var" || cls === "VAR") {
+        if (opcode === "data_setvariableto") return "set";
+        if (opcode === "data_changevariableby") return "change";
+        return "use";
+      }
+      if (cls === "list" || cls === "LIST") {
+        const modifyOpcodes = [
+          "data_addtolist",
+          "data_deleteoflist",
+          "data_deletealloflist",
+          "data_insertatlist",
+          "data_replaceitemoflist",
+        ];
+        return modifyOpcodes.includes(opcode) ? "modify" : "read";
+      }
+      if (cls === "broadcast") {
+        return opcode === "event_whenbroadcastreceived" ? "receive" : "send";
+      }
+      if (cls === "define") {
+        return opcode === "procedures_definition" ? "definition" : "call";
+      }
+      return null;
+    }
+
+    /**
+     * Recomputes this.blocks from this.allBlocks applying active sub-type and sprite filters.
+     * Empty filter sets mean "no restriction" — both must be non-empty to restrict.
+     * Clamps this.idx and updates the count display.
+     */
+    applyFilters() {
+      const cls = this.selectedItem?.data?.cls;
+      const hasSubTypeFilter = this.activeSubTypeFilters.size > 0;
+      const hasSpriteFilter = this.activeSpriteFilters.size > 0;
+      if (!hasSubTypeFilter && !hasSpriteFilter) {
+        this.blocks = [...this.allBlocks];
+      } else {
+        this.blocks = this.allBlocks.filter((block) => {
+          if (hasSpriteFilter && !this.activeSpriteFilters.has(this.getBlockTargetId(block))) return false;
+          if (hasSubTypeFilter) {
+            const subType = this.getSubTypeKey(block, cls);
+            if (subType !== null && !this.activeSubTypeFilters.has(subType)) return false;
+          }
+          return true;
+        });
+      }
+      if (this.idx >= this.blocks.length) {
+        this.idx = Math.max(0, this.blocks.length - 1);
+      }
+      if (this.count) {
+        this.count.innerHTML = this.blocks.length > 0 ? this.idx + 1 + " / " + this.blocks.length : "0";
+      }
+    }
+
+    build(item, blocks, instanceBlock, forceAllSprites = false, cloneFilterContext = null) {
+      // Clear previous highlights
+      this.highlighter.clearAll();
+
+      if (this.selectedItem === item && this.blocks.length > 0) {
+        // Same item selected... click again to go to next
         this.navRight();
       } else {
         this.remove();
+        this.allBlocks = blocks;
+        this.activeSubTypeFilters = new Set();
+        this.activeSpriteFilters = new Set();
         this.blocks = blocks;
+        this.selectedItem = item;
+        this.isDirty = false;
+        this.currentTargetId = this.utils.getEditingTarget().id;
+        this.forceAllSprites = forceAllSprites;
+        this.cloneFilterContext = cloneFilterContext;
 
         this.idx = 0;
         if (instanceBlock) {
+          const instanceId = this.utils.getBlockId(instanceBlock);
           for (const idx of Object.keys(this.blocks)) {
             const block = this.blocks[idx];
-            if (block.id === instanceBlock.id) {
+            const blockId = this.utils.getBlockId(block);
+            if (blockId === instanceId) {
               this.idx = Number(idx);
               break;
             }
           }
         }
-        item.appendChild(this.createDom());
+        this.createDom(item);
 
         if (this.idx < this.blocks.length) {
           this.utils.scrollBlockIntoView(this.blocks[this.idx]);
         }
+
+        // Immediately show in navigation area (even if 0 items)
+        if (this.findBar) {
+          this.findBar.showNavigation(item, this);
+        }
+
+        // Build info panel (only if there are blocks to show)
+        if (this.allBlocks.length > 0) {
+          this.infoPanel.build(this.allBlocks, item);
+        }
+
+        // Listen for workspace changes to mark carousel as dirty
+        this.startListeningForChanges();
+
+        // Highlight all blocks in carousel
+        this.reapplyHighlights();
       }
     }
 
-    createDom() {
+    startListeningForChanges() {
+      if (this.workspaceChangeListener) return; // Already listening
+
+      const workspace = addon.tab.traps.getWorkspace();
+      this.workspaceChangeListener = (e) => {
+        // Minimal guards
+        if (e.isUiEvent) return;
+
+        // Clear suppression when finished loading a batch
+        const FINISHED_LOADING = (Blockly?.Events && Blockly.Events.FINISHED_LOADING) || "finished_loading";
+        if (e.type === FINISHED_LOADING) {
+          this._suppressDirty = false;
+          return;
+        }
+
+        // Detect sprite switch and start a short suppression
+        const currentTargetId = this.utils.getEditingTarget().id;
+        if (currentTargetId !== this.currentTargetId) {
+          this.currentTargetId = currentTargetId;
+          // Clear navigation history when switching sprites
+          this.utils.navigationHistory.clearHistory();
+          this._suppressDirty = true;
+          if (this._suppressTimer) clearTimeout(this._suppressTimer);
+          this._suppressTimer = setTimeout(() => {
+            this._suppressDirty = false;
+            // Re-apply highlights after sprite switch
+            this.reapplyHighlights();
+          }, 200);
+          return;
+        }
+
+        if (this._suppressDirty) return;
+
+        // Remove outline from edited blocks (shape may change when typing)
+        if (e.blockId && this.highlighter.highlightedBlocks.has(e.blockId)) {
+          // Remove outline on any change to a highlighted block (typing, dragging, etc.)
+          if (
+            e.type === Blockly.Events.BLOCK_CHANGE ||
+            e.type === Blockly.Events.BLOCK_FIELD_INTERMEDIATE_CHANGE ||
+            e.type === Blockly.Events.BLOCK_MOVE
+          ) {
+            this.highlighter.removeOutline(e.blockId);
+          }
+        }
+
+        // Only mark as dirty for actual block changes on the current sprite
+        if (
+          e.type === Blockly.Events.BLOCK_CHANGE ||
+          e.type === Blockly.Events.BLOCK_CREATE ||
+          e.type === Blockly.Events.BLOCK_DELETE ||
+          e.type === Blockly.Events.BLOCK_MOVE ||
+          e.type === Blockly.Events.VAR_CREATE ||
+          e.type === Blockly.Events.VAR_DELETE ||
+          e.type === Blockly.Events.VAR_RENAME
+        ) {
+          this.isDirty = true;
+        }
+      };
+      workspace.addChangeListener(this.workspaceChangeListener);
+    }
+
+    stopListeningForChanges() {
+      if (this.workspaceChangeListener) {
+        const workspace = addon.tab.traps.getWorkspace();
+        workspace.removeChangeListener(this.workspaceChangeListener);
+        this.workspaceChangeListener = null;
+      }
+    }
+
+    refreshIfDirty() {
+      if (!this.isDirty || !this.selectedItem) return;
+
+      // Save references before rebuild
+      const currentSearchValue = this.findBar.findInput.value || "";
+      const oldItem = this.selectedItem;
+
+      // If this is a clone-filtered carousel, rebuild with the same filter
+      let blocks;
+      if (this.cloneFilterContext) {
+        // Rebuild dropdown with forceAllSprites to get all clone blocks
+        this.findBar.rebuildDropdownItems(null, null, true);
+
+        // Find the clone event item
+        const cloneDesc = msg("when-i-start-as-clone");
+        const evtItem = this.findBar.dropdown.items.find(
+          (i) => i.data && i.data.cls === "event" && i.data.procCode === cloneDesc
+        );
+
+        if (!evtItem) return;
+
+        // Get all clone blocks and apply the sprite filter
+        let allBlocks = this.findBar.dropdown.getEventBlocks(cloneDesc, true);
+        blocks = this.filterCloneBlocksBySprite(allBlocks, this.cloneFilterContext.targetSpriteId);
+
+        // Keep the synthetic item with the sprite name
+        this.selectedItem = oldItem;
+      } else {
+        // Normal rebuild path
+        this.findBar.rebuildDropdownItems(null, null, this.forceAllSprites);
+
+        // Find the matching new item and restore selection
+        for (const item of this.findBar.dropdown.items) {
+          let isMatch;
+
+          if (oldItem.data.cls === "broadcast" && item.data.cls === "broadcast") {
+            isMatch = item.data.eventName === oldItem.data.eventName;
+          } else if (oldItem.data.cls === "event" && item.data.cls === "event") {
+            // Match events by their description/procCode, not by a block id that can change order
+            isMatch = item.data.procCode === oldItem.data.procCode;
+          } else {
+            // Fallback: match by labelID (procedure defs, variables/lists, single blocks)
+            isMatch = item.data.labelID === oldItem.data.labelID;
+          }
+
+          if (isMatch) {
+            this.selectedItem = item;
+            item.classList.add("sel");
+            this.findBar.dropdown.selected = item;
+            break;
+          }
+        }
+
+        // Reapply the current filter if dropdown is visible and there's a search value
+        if (this.findBar.dropdownOut.classList.contains("visible") && currentSearchValue) {
+          const val = currentSearchValue.toLowerCase();
+          this.findBar.applyFilter(val);
+        }
+
+        // Re-fetch the blocks for the current item with fresh data
+        blocks = this.findBar.dropdown.getBlocksForItem(this.selectedItem);
+        if (!blocks) return;
+      }
+
+      // Try to maintain position on the same block ID if it still exists
+      const currentBlockId = this.blocks[this.idx]?.id;
+      this.allBlocks = blocks;
+      this.applyFilters(); // rebuilds this.blocks from allBlocks with current filters
+
+      // Find the index of the current block in the new filtered list
+      if (currentBlockId) {
+        const newIdx = this.blocks.findIndex((b) => b.id === currentBlockId);
+        if (newIdx !== -1) {
+          this.idx = newIdx;
+        } else {
+          // Block no longer exists, stay at same index or clamp to valid range
+          this.idx = Math.min(this.idx, Math.max(0, this.blocks.length - 1));
+        }
+      } else {
+        this.idx = 0;
+      }
+
+      // Update the count display with the restored idx
+      if (this.count) {
+        this.count.innerHTML = this.blocks.length > 0 ? this.idx + 1 + " / " + this.blocks.length : "0";
+      }
+
+      // Re-highlight all blocks
+      this.highlighter.clearAll();
+      const workspace = addon.tab.traps.getWorkspace();
+      for (const blockInstance of this.blocks) {
+        const block = workspace.getBlockById(blockInstance.id);
+        if (block) {
+          this.highlighter.highlight(block);
+        }
+      }
+
+      // Refresh the info panel with updated block data
+      if (this.allBlocks.length > 0) {
+        this.infoPanel.build(this.allBlocks, this.selectedItem);
+      }
+
+      this.isDirty = false;
+    }
+
+    createDom(item) {
       this.el = document.createElement("span");
       this.el.className = "sa-find-carousel";
+
+      // Apply the same color class as the item for consistent theming
+      if (item && item.className) {
+        // Copy color classes from the item
+        const colorClasses = item.className.match(/sa-block-color-[\w-]+/g);
+        if (colorClasses) {
+          this.el.className += " " + colorClasses.join(" ");
+        }
+        if (item.className.includes("sa-find-flag")) {
+          this.el.classList.add("sa-find-flag");
+        }
+      }
 
       const leftControl = this.el.appendChild(document.createElement("span"));
       leftControl.className = "sa-find-carousel-control";
@@ -727,7 +2040,14 @@ export default async function ({ addon, msg, console }) {
       leftControl.addEventListener("mousedown", (e) => this.navLeft(e));
 
       this.count = this.el.appendChild(document.createElement("span"));
-      this.count.innerText = this.blocks.length > 0 ? this.idx + 1 + " / " + this.blocks.length : "0";
+      this.count.className = "sa-find-carousel-count";
+      this.count.innerHTML = this.blocks.length > 0 ? this.idx + 1 + " / " + this.blocks.length : "0";
+      this.count.addEventListener("mousedown", (e) => {
+        this.refreshIfDirty();
+        this.infoPanel.toggle(this.count);
+        e.preventDefault();
+        e.stopPropagation();
+      });
 
       const rightControl = this.el.appendChild(document.createElement("span"));
       rightControl.className = "sa-find-carousel-control";
@@ -762,10 +2082,18 @@ export default async function ({ addon, msg, console }) {
     }
 
     navSideways(e, dir) {
+      // Refresh carousel if workspace has changed
+      this.refreshIfDirty();
+
       if (this.blocks.length > 0) {
         this.idx = (this.idx + dir + this.blocks.length) % this.blocks.length; // + length to fix negative modulo js issue.
         this.count.innerText = this.idx + 1 + " / " + this.blocks.length;
-        this.utils.scrollBlockIntoView(this.blocks[this.idx]);
+
+        // Pass callback to apply highlights immediately after sprite switch
+        this.utils.scrollBlockIntoView(this.blocks[this.idx], false, () => {
+          this.reapplyHighlights();
+          this.showSpriteNotification();
+        });
       }
 
       if (e) {
@@ -774,70 +2102,916 @@ export default async function ({ addon, msg, console }) {
       }
     }
 
+    reapplyHighlights() {
+      // Clear and re-apply highlights (useful after sprite switch)
+      this.highlighter.clearAll();
+      const workspace = addon.tab.traps.getWorkspace();
+      for (const blockInstance of this.blocks) {
+        const block = workspace.getBlockById(blockInstance.id);
+        if (block) {
+          this.highlighter.highlight(block);
+        }
+      }
+    }
+
+    showSpriteNotification() {
+      const spriteName = this.utils.getEditingTarget().getName();
+
+      // Create notification element if it doesn't exist
+      if (!this.spriteNotification) {
+        this.spriteNotification = document.createElement("div");
+        this.spriteNotification.className = "sa-find-sprite-notification";
+        document.body.appendChild(this.spriteNotification);
+      }
+
+      // Set sprite name
+      this.spriteNotification.textContent = spriteName;
+
+      // Position below the carousel
+      if (this.el) {
+        const rect = this.el.getBoundingClientRect();
+        this.spriteNotification.style.left = rect.left + rect.width / 2 + "px";
+        this.spriteNotification.style.top = rect.bottom + 16 + "px";
+        this.spriteNotification.style.transform = "translateX(-50%)";
+      }
+
+      // Show with animation
+      this.spriteNotification.classList.remove("sa-find-sprite-notification-hiding");
+      this.spriteNotification.classList.add("sa-find-sprite-notification-visible");
+
+      // Clear any existing timeout
+      if (this.notificationTimeout) {
+        clearTimeout(this.notificationTimeout);
+      }
+
+      // Hide after delay
+      this.notificationTimeout = setTimeout(() => {
+        this.spriteNotification.classList.remove("sa-find-sprite-notification-visible");
+        this.spriteNotification.classList.add("sa-find-sprite-notification-hiding");
+      }, 1500);
+    }
+
     remove() {
+      this.stopListeningForChanges();
+      this.highlighter.clearAll();
+      this.infoPanel.remove();
+
+      // Clean up notification
+      if (this.notificationTimeout) {
+        clearTimeout(this.notificationTimeout);
+        this.notificationTimeout = null;
+      }
+      if (this.spriteNotification) {
+        this.spriteNotification.remove();
+        this.spriteNotification = null;
+      }
+
       if (this.el) {
         this.el.remove();
         this.blocks = [];
         this.idx = 0;
+        this.selectedItem = null;
+        this.isDirty = false;
+      }
+    }
+  }
+
+  class CarouselInfoPanel {
+    constructor(carousel) {
+      this.carousel = carousel;
+      this.el = null;
+      this._outsideClickHandler = null;
+      this._escKeyHandler = null;
+    }
+
+    /**
+     * Returns an ordered array of sub-type definitions [{key, label}] for the given cls,
+     * or null if the cls has no meaningful sub-type breakdown.
+     */
+    getSubTypes(cls) {
+      if (cls === "var" || cls === "VAR") {
+        return [
+          { key: "set", label: msg("info-set") },
+          { key: "change", label: msg("info-change") },
+          { key: "use", label: msg("info-use") },
+        ];
+      }
+      if (cls === "list" || cls === "LIST") {
+        return [
+          { key: "modify", label: msg("info-modify") },
+          { key: "read", label: msg("info-read") },
+        ];
+      }
+      if (cls === "broadcast") {
+        return [
+          { key: "send", label: msg("info-send") },
+          { key: "receive", label: msg("info-receive") },
+        ];
+      }
+      if (cls === "define") {
+        return [
+          { key: "definition", label: msg("info-definition") },
+          { key: "call", label: msg("info-call") },
+        ];
+      }
+      return null;
+    }
+
+    /**
+     * Builds the panel DOM from the full (unfiltered) block list and appends it to
+     * document.body (hidden). Call toggle() to show it.
+     */
+    build(allBlocks, item) {
+      const runtime = addon.tab.traps.vm.runtime;
+      const cls = item?.data?.cls;
+      const allSubTypes = this.getSubTypes(cls);
+
+      if (this.el) this.el.remove();
+      this.el = document.createElement("div");
+      this.el.className = "sa-find-info-panel";
+      this.el.style.display = "none";
+
+      // Gather per-sprite, per-subtype counts from allBlocks
+      const spriteOrder = []; // Ordered list of targetIds (insertion order)
+      const spriteNames = new Map(); // targetId → display name
+      const counts = new Map(); // targetId → { [subType]: number, total: number }
+
+      for (const block of allBlocks) {
+        const targetId = this.carousel.getBlockTargetId(block);
+        if (!spriteOrder.includes(targetId)) {
+          spriteOrder.push(targetId);
+          const target = runtime.targets.find((t) => t.id === targetId);
+          spriteNames.set(targetId, target?.getName() ?? "?");
+          counts.set(targetId, { total: 0 });
+        }
+        const row = counts.get(targetId);
+        row.total++;
+        if (allSubTypes) {
+          const subType = this.carousel.getSubTypeKey(block, cls);
+          if (subType) row[subType] = (row[subType] ?? 0) + 1;
+        }
+      }
+
+      const table = this.el.appendChild(document.createElement("table"));
+      table.className = "sa-find-info-table";
+
+      if (allSubTypes) {
+        // Only show sub-type columns that actually have blocks
+        const usedSubTypes = allSubTypes.filter(({ key }) =>
+          spriteOrder.some((id) => (counts.get(id)?.[key] ?? 0) > 0)
+        );
+
+        if (usedSubTypes.length > 1) {
+          // Header row with column checkboxes
+          const thead = table.appendChild(document.createElement("thead"));
+          const headerRow = thead.appendChild(document.createElement("tr"));
+          headerRow.appendChild(document.createElement("th")); // empty corner
+
+          for (const { key, label } of usedSubTypes) {
+            const th = headerRow.appendChild(document.createElement("th"));
+            th.className = "sa-find-info-col-header";
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.className = "sa-find-info-checkbox";
+            cb.checked = this.carousel.activeSubTypeFilters.has(key);
+            cb.addEventListener("change", () => this._onFilterChange());
+            cb.dataset.subTypeKey = key;
+            const lbl = document.createElement("label");
+            lbl.appendChild(cb);
+            lbl.appendChild(document.createTextNode(" " + label));
+            th.appendChild(lbl);
+          }
+        }
+
+        // Data rows — one per sprite
+        const tbody = table.appendChild(document.createElement("tbody"));
+        for (const targetId of spriteOrder) {
+          const tr = tbody.appendChild(document.createElement("tr"));
+
+          const spriteCell = tr.appendChild(document.createElement("td"));
+          spriteCell.className = "sa-find-info-sprite-cell";
+          const rowCb = document.createElement("input");
+          rowCb.type = "checkbox";
+          rowCb.className = "sa-find-info-checkbox";
+          rowCb.checked = this.carousel.activeSpriteFilters.has(targetId);
+          rowCb.dataset.spriteTargetId = targetId;
+          rowCb.addEventListener("change", () => this._onFilterChange());
+          const rowLbl = document.createElement("label");
+          rowLbl.appendChild(rowCb);
+          rowLbl.appendChild(document.createTextNode(" " + spriteNames.get(targetId)));
+          spriteCell.appendChild(rowLbl);
+
+          for (const { key } of usedSubTypes.length > 1 ? usedSubTypes : []) {
+            const td = tr.appendChild(document.createElement("td"));
+            td.className = "sa-find-info-count-cell";
+            const n = counts.get(targetId)?.[key] ?? 0;
+            td.textContent = n > 0 ? String(n) : "–";
+            if (n === 0) td.classList.add("sa-find-info-count-zero");
+          }
+
+          // When only one sub-type column exists, show the total count instead
+          if (usedSubTypes.length === 1) {
+            const td = tr.appendChild(document.createElement("td"));
+            td.className = "sa-find-info-count-cell";
+            td.textContent = String(counts.get(targetId)?.total ?? 0);
+          }
+        }
+      } else {
+        // No sub-types — sprite rows with checkbox and total count
+        const tbody = table.appendChild(document.createElement("tbody"));
+        for (const targetId of spriteOrder) {
+          const tr = tbody.appendChild(document.createElement("tr"));
+
+          const spriteCell = tr.appendChild(document.createElement("td"));
+          spriteCell.className = "sa-find-info-sprite-cell";
+          const rowCb = document.createElement("input");
+          rowCb.type = "checkbox";
+          rowCb.className = "sa-find-info-checkbox";
+          rowCb.checked = this.carousel.activeSpriteFilters.has(targetId);
+          rowCb.dataset.spriteTargetId = targetId;
+          rowCb.addEventListener("change", () => this._onFilterChange());
+          const rowLbl = document.createElement("label");
+          rowLbl.appendChild(rowCb);
+          rowLbl.appendChild(document.createTextNode(" " + spriteNames.get(targetId)));
+          spriteCell.appendChild(rowLbl);
+
+          const td = tr.appendChild(document.createElement("td"));
+          td.className = "sa-find-info-count-cell";
+          td.textContent = String(counts.get(targetId)?.total ?? 0);
+        }
+      }
+
+      // ── Instances table ─────────────────────────────────────────────
+      const hr = this.el.appendChild(document.createElement("hr"));
+      hr.className = "sa-find-info-divider";
+
+      const instancesWrap = this.el.appendChild(document.createElement("div"));
+      instancesWrap.className = "sa-find-info-instances-wrap";
+
+      const instTable = instancesWrap.appendChild(document.createElement("table"));
+      instTable.className = "sa-find-info-instances-table";
+
+      const instHead = instTable.appendChild(document.createElement("thead"));
+      const instHeadRow = instHead.appendChild(document.createElement("tr"));
+      for (const label of [msg("info-col-sprite"), msg("info-col-hat"), msg("info-col-block")]) {
+        const th = instHeadRow.appendChild(document.createElement("th"));
+        th.textContent = label;
+      }
+
+      const instBody = instTable.appendChild(document.createElement("tbody"));
+      for (const block of allBlocks) {
+        const targetId = this.carousel.getBlockTargetId(block);
+        const target = runtime.targets.find((t) => t.id === targetId);
+        const rawBlocks = target?.blocks._blocks ?? {};
+        const rawBlock = rawBlocks[block.id];
+        const rootBlock = rawBlock ? this._getRootBlockData(block.id, rawBlocks) : null;
+
+        const tr = instBody.appendChild(document.createElement("tr"));
+        tr.className = "sa-find-info-instance-row";
+        tr.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        tr.addEventListener("click", () => {
+          const idxInFiltered = this.carousel.blocks.indexOf(block);
+          if (idxInFiltered !== -1) {
+            this.carousel.idx = idxInFiltered;
+            if (this.carousel.count) {
+              this.carousel.count.innerHTML =
+                this.carousel.idx + 1 + " / " + this.carousel.blocks.length;
+            }
+          }
+          this.carousel.utils.scrollBlockIntoView(block);
+          this.hide();
+        });
+
+        const spriteText = spriteNames.get(targetId) ?? "?";
+        const hatText = rootBlock ? this._hatText(rootBlock, rawBlocks) : "–";
+        const blockText = rawBlock ? this._blockText(rawBlock, rawBlocks) : "–";
+
+        for (const [text, cls] of [
+          [spriteText, "sa-find-info-inst-sprite"],
+          [hatText, "sa-find-info-inst-hat"],
+          [blockText, "sa-find-info-inst-block"],
+        ]) {
+          const td = tr.appendChild(document.createElement("td"));
+          td.className = cls;
+          td.textContent = text;
+          td.title = text;
+        }
+      }
+
+      document.body.appendChild(this.el);
+    }
+
+    /** Walks up the parent chain and returns the root block data object. */
+    _getRootBlockData(blockId, rawBlocks) {
+      let id = blockId;
+      while (rawBlocks[id]?.parent) {
+        id = rawBlocks[id].parent;
+      }
+      return rawBlocks[id] ?? null;
+    }
+
+    /**
+     * Resolves a block input slot to a short display string.
+     * scratch-vm stores inputs as objects: {block: primaryId, shadow: shadowId}.
+     * If block === shadow the slot holds a literal shadow value; otherwise a reporter is plugged in.
+     */
+    _resolveInput(inputs, key, rawBlocks, depth = 0) {
+      const input = inputs?.[key];
+      if (!input) return "?";
+      const primaryId = input.block;
+      if (!primaryId) return "?";
+      const primaryBlock = rawBlocks[primaryId];
+      if (!primaryBlock) return "?";
+      // Shadow (literal) — read the field value directly
+      if (primaryId === input.shadow) {
+        const firstField = Object.values(primaryBlock.fields ?? {})[0];
+        return firstField ? String(firstField.value) : "";
+      }
+      // Reporter plugged in — describe it
+      if (depth >= 3) return "(\u2026)";
+      return this._describeReporter(primaryBlock, rawBlocks, depth + 1);
+    }
+
+    /** Recursively describes a reporter block as a plain-text string. */
+    _describeReporter(blockData, rawBlocks, depth = 0) {
+      if (!blockData) return "?";
+      const { opcode, fields, inputs } = blockData;
+      const f = (name) => fields?.[name]?.value ?? "?";
+      const i = (name) => this._resolveInput(inputs, name, rawBlocks, depth);
+
+      switch (opcode) {
+        case "data_variable": return f("VARIABLE");
+        case "data_list": return f("LIST");
+        case "data_itemoflist": return `item ${i("INDEX")} of ${f("LIST")}`;
+        case "data_lengthoflist": return `length of ${f("LIST")}`;
+        case "data_itemnumoflist": return `item # of ${i("ITEM")} in ${f("LIST")}`;
+        case "data_listcontainsitem": return `${f("LIST")} contains ${i("ITEM")}`;
+        case "operator_add": return `(${i("NUM1")} + ${i("NUM2")})`;
+        case "operator_subtract": return `(${i("NUM1")} \u2212 ${i("NUM2")})`;
+        case "operator_multiply": return `(${i("NUM1")} \u00D7 ${i("NUM2")})`;
+        case "operator_divide": return `(${i("NUM1")} / ${i("NUM2")})`;
+        case "operator_mod": return `(${i("NUM1")} mod ${i("NUM2")})`;
+        case "operator_round": return `round ${i("NUM")}`;
+        case "operator_join": return `join ${i("STRING1")} ${i("STRING2")}`;
+        case "operator_letter_of": return `letter ${i("LETTER")} of ${i("STRING")}`;
+        case "operator_length": return `length of ${i("STRING")}`;
+        case "operator_contains": return `${i("STRING1")} contains ${i("STRING2")}`;
+        case "operator_mathop": return `${f("OPERATOR")} of ${i("NUM")}`;
+        case "motion_xposition": return "x";
+        case "motion_yposition": return "y";
+        case "motion_direction": return "direction";
+        case "looks_size": return "size";
+        case "looks_costumenumbername": return f("NUMBER_NAME") === "name" ? "costume name" : "costume #";
+        case "looks_backdropnumbername": return f("NUMBER_NAME") === "name" ? "backdrop name" : "backdrop #";
+        case "sound_volume": return "volume";
+        case "sensing_timer": return "timer";
+        case "sensing_answer": return "answer";
+        case "sensing_loudness": return "loudness";
+        case "sensing_dayssince2000": return "days since 2000";
+        case "sensing_current": return `current ${f("CURRENTMENU").toLowerCase()}`;
+        case "sensing_username": return "username";
+        case "sensing_mousex": return "mouse x";
+        case "sensing_mousey": return "mouse y";
+        case "sensing_distanceto": return `distance to ${i("DISTANCETOMENU")}`;
+        default:
+          return opcode.replace(/^[a-zA-Z]+_/, "");
+      }
+    }
+
+    /** Returns a human-readable text for a block, used in the instances table. */
+    _blockText(blockData, rawBlocks) {
+      if (!blockData) return "?";
+      const { opcode, fields, inputs, mutation } = blockData;
+      const f = (name) => fields?.[name]?.value ?? "?";
+      const i = (name) => this._resolveInput(inputs, name, rawBlocks);
+
+      switch (opcode) {
+        case "data_setvariableto": return `set ${f("VARIABLE")} to ${i("VALUE")}`;
+        case "data_changevariableby": return `change ${f("VARIABLE")} by ${i("VALUE")}`;
+        case "data_variable": return f("VARIABLE");
+        case "data_showvariable": return `show variable ${f("VARIABLE")}`;
+        case "data_hidevariable": return `hide variable ${f("VARIABLE")}`;
+        case "data_addtolist": return `add ${i("ITEM")} to ${f("LIST")}`;
+        case "data_deleteoflist": return `delete ${i("INDEX")} of ${f("LIST")}`;
+        case "data_deletealloflist": return `delete all of ${f("LIST")}`;
+        case "data_insertatlist": return `insert ${i("ITEM")} at ${i("INDEX")} of ${f("LIST")}`;
+        case "data_replaceitemoflist": return `replace item ${i("INDEX")} of ${f("LIST")} with ${i("ITEM")}`;
+        case "data_itemoflist": return `item ${i("INDEX")} of ${f("LIST")}`;
+        case "data_itemnumoflist": return `item # of ${i("ITEM")} in ${f("LIST")}`;
+        case "data_lengthoflist": return `length of ${f("LIST")}`;
+        case "data_listcontainsitem": return `${f("LIST")} contains ${i("ITEM")}`;
+        case "data_showlist": return `show list ${f("LIST")}`;
+        case "data_hidelist": return `hide list ${f("LIST")}`;
+        case "data_list": return f("LIST");
+        case "event_broadcast": return `broadcast ${i("BROADCAST_INPUT")}`;
+        case "event_broadcastandwait": return `broadcast ${i("BROADCAST_INPUT")} and wait`;
+        case "event_whenbroadcastreceived": return `when I receive ${f("BROADCAST_OPTION")}`;
+        case "procedures_call": {
+          const proccode = mutation?.proccode ?? "?";
+          const argIds = JSON.parse(mutation?.argumentids ?? "[]");
+          let text = proccode;
+          for (const argId of argIds) {
+            text = text.replace(/%(s|b)/, i(argId));
+          }
+          return text;
+        }
+        case "procedures_definition": {
+          const protoId = inputs?.custom_block?.block;
+          const proto = protoId ? rawBlocks[protoId] : null;
+          return `define ${proto?.mutation?.proccode ?? "?"}`;
+        }
+        default:
+          return this._describeReporter(blockData, rawBlocks);
+      }
+    }
+
+    /** Returns a human-readable text for a hat (root) block. */
+    _hatText(blockData, rawBlocks) {
+      if (!blockData) return "–";
+      const { opcode, fields, inputs } = blockData;
+      const f = (name) => fields?.[name]?.value ?? "?";
+
+      switch (opcode) {
+        case "event_whenflagclicked": return "when \uD83C\uDFC1 clicked";
+        case "event_whenkeypressed": return `when ${f("KEY_OPTION")} key pressed`;
+        case "event_whenthisspriteclicked": return "when this sprite clicked";
+        case "event_whenstageclicked": return "when stage clicked";
+        case "event_whenbroadcastreceived": return `when I receive ${f("BROADCAST_OPTION")}`;
+        case "event_whenbackdropswitchesto": return `when backdrop switches to ${f("BACKDROP")}`;
+        case "event_whengreaterthan":
+          return `when ${f("WHENGREATERTHANMENU")} > ${this._resolveInput(inputs, "VALUE", rawBlocks)}`;
+        case "control_start_as_clone": return "when I start as a clone";
+        case "procedures_definition": {
+          const protoId = inputs?.custom_block?.block;
+          const proto = protoId ? rawBlocks[protoId] : null;
+          return `define ${proto?.mutation?.proccode ?? "?"}`;
+        }
+        default:
+          return this._blockText(blockData, rawBlocks);
+      }
+    }
+
+    /**
+     * Reads all checkboxes and updates both filter sets on the carousel,
+     * then applies filters and scrolls to the current block.
+     */
+    _onFilterChange() {
+      if (!this.el) return;
+      const carousel = this.carousel;
+
+      carousel.activeSubTypeFilters = new Set(
+        [...this.el.querySelectorAll("input[data-sub-type-key]:checked")].map((cb) => cb.dataset.subTypeKey)
+      );
+      carousel.activeSpriteFilters = new Set(
+        [...this.el.querySelectorAll("input[data-sprite-target-id]:checked")].map(
+          (cb) => cb.dataset.spriteTargetId
+        )
+      );
+
+      carousel.applyFilters();
+      if (carousel.idx < carousel.blocks.length) {
+        carousel.utils.scrollBlockIntoView(carousel.blocks[carousel.idx]);
+      }
+    }
+
+    isVisible() {
+      return this.el ? this.el.style.display !== "none" : false;
+    }
+
+    toggle(anchorEl) {
+      if (this.isVisible()) {
+        this.hide();
+      } else {
+        this.show(anchorEl);
+      }
+    }
+
+    show(anchorEl) {
+      if (!this.el) return;
+      const rect = anchorEl.getBoundingClientRect();
+      this.el.style.left = rect.left + "px";
+      this.el.style.top = rect.bottom + 4 + "px";
+      this.el.style.display = "block";
+
+      // Close when clicking outside or pressing Escape
+      if (!this._outsideClickHandler) {
+        this._outsideClickHandler = (e) => {
+          if (this.el && this.el.style.display !== "none") {
+            if (!this.el.contains(e.target) && e.target !== anchorEl) {
+              this.hide();
+            }
+          }
+        };
+        this._escKeyHandler = (e) => {
+          if (e.key === "Escape" && this.isVisible()) {
+            this.hide();
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        };
+        // Defer so the current click doesn't immediately close it
+        setTimeout(() => {
+          window.addEventListener("mousedown", this._outsideClickHandler, true);
+          document.addEventListener("keydown", this._escKeyHandler, true);
+        }, 0);
+      }
+    }
+
+    hide() {
+      if (this.el) this.el.style.display = "none";
+      this._removeOutsideClickHandler();
+    }
+
+    _removeOutsideClickHandler() {
+      if (this._outsideClickHandler) {
+        window.removeEventListener("mousedown", this._outsideClickHandler, true);
+        this._outsideClickHandler = null;
+      }
+      if (this._escKeyHandler) {
+        document.removeEventListener("keydown", this._escKeyHandler, true);
+        this._escKeyHandler = null;
+      }
+    }
+
+    remove() {
+      this._removeOutsideClickHandler();
+      if (this.el) {
+        this.el.remove();
+        this.el = null;
+      }
+    }
+  }
+
+  class BlockHighlighter {
+    constructor(addon) {
+      this.addon = addon;
+      this.highlightedBlocks = new Set();
+      this.outlinePaths = new Map(); // Store outline elements
+    }
+
+    getSvgPath(block) {
+      if (!block) return null;
+      if (block.pathObject) return block.pathObject.svgPath; // new Blockly
+      if (block.svgPath_) return block.svgPath_; // old Blockly
+
+      // Fallback for shadow blocks (like text blocks) that don't have pathObject/svgPath_
+      // These blocks have their path as a child element with class "blocklyPath"
+      if (block.getSvgRoot) {
+        const svgRoot = block.getSvgRoot();
+        if (svgRoot) {
+          const path = svgRoot.querySelector(".blocklyPath.blocklyBlockBackground");
+          if (path) return path;
+        }
+      }
+
+      return null;
+    }
+
+    highlight(block) {
+      const svgPath = this.getSvgPath(block);
+      if (!svgPath) return;
+
+      svgPath.classList.add("sa-find-highlighted");
+      this.highlightedBlocks.add(block.id);
+
+      // Create an outline path that renders on top
+      const outline = svgPath.cloneNode(true);
+      outline.classList.remove("sa-find-highlighted");
+      outline.style.fill = "none";
+      outline.style.stroke = "rgba(0, 0, 0, 0.6)";
+      outline.style.strokeWidth = "3";
+      outline.style.pointerEvents = "none";
+      outline.setAttribute("data-sa-find-outline", "true");
+
+      // Insert after the original path so it renders on top
+      svgPath.parentNode.appendChild(outline);
+      this.outlinePaths.set(block.id, outline);
+    }
+
+    unhighlight(block) {
+      const svgPath = this.getSvgPath(block);
+      if (!svgPath) return;
+
+      svgPath.classList.remove("sa-find-highlighted");
+      this.highlightedBlocks.delete(block.id);
+
+      // Remove the outline path
+      const outline = this.outlinePaths.get(block.id);
+      if (outline && outline.parentNode) {
+        outline.parentNode.removeChild(outline);
+      }
+      this.outlinePaths.delete(block.id);
+    }
+
+    removeOutline(blockId) {
+      // Remove just the outline (not the background highlight) when a block is edited
+      const outline = this.outlinePaths.get(blockId);
+      if (outline && outline.parentNode) {
+        outline.parentNode.removeChild(outline);
+      }
+      this.outlinePaths.delete(blockId);
+    }
+
+    clearAll() {
+      const workspace = this.addon.tab.traps.getWorkspace();
+      for (const blockId of this.highlightedBlocks) {
+        const block = workspace.getBlockById(blockId);
+        if (block) {
+          this.unhighlight(block);
+        }
       }
     }
   }
 
   const findBar = new FindBar();
 
+  // Helper function to check if a block can be explored
+  function canBlockBeExplored(block) {
+    if (!block) return false;
+
+    // Walk up the block tree to find explorable blocks
+    for (let b = block; b; b = b.getSurroundParent ? b.getSurroundParent() : null) {
+      if (BlockTypes.isExplorableBlock(b.type)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Helper function to handle middle-click/shift-click on blocks
+  function handleBlockExplore(block) {
+    if (!block) return false;
+
+    for (; block; block = block.getSurroundParent ? block.getSurroundParent() : null) {
+      if (block.type === "procedures_definition") {
+        let id = findBar.utils.getBlockId(block);
+        findBar.showDropDown(id, block, true);
+        return true;
+      }
+
+      if (block.type === "procedures_call") {
+        // For procedure calls, find the definition by procCode
+        const procCode = block.getProcCode();
+        if (procCode) {
+          const workspace = addon.tab.traps.getWorkspace();
+          const topBlocks = getTopBlocks(workspace);
+          for (const topBlock of topBlocks) {
+            if (topBlock.type === "procedures_definition") {
+              const label = topBlock.getChildren()[0];
+              if (label?.getProcCode() === procCode) {
+                // Pass the definition block as instanceBlock to start carousel there
+                findBar.showDropDown(topBlock.id, topBlock, true);
+                return true;
+              }
+            }
+          }
+        }
+        return true;
+      }
+
+      if (BlockTypes.isVariableBlock(block.type)) {
+        let id = block.getVars()[0];
+        findBar.showDropDown(id, block, true);
+        findBar.selVarID = id;
+        return true;
+      }
+
+      if (BlockTypes.isListBlock(block.type)) {
+        let id = block.getVars()[0];
+        findBar.showDropDown(id, block, true);
+        findBar.selVarID = id;
+        return true;
+      }
+
+      if (BlockTypes.isBroadcastBlock(block.type)) {
+        // For broadcast blocks, we need to find the item by broadcast name, not block ID
+        // Rebuild the dropdown to get fresh items
+        findBar.showDropDown(null, null, true);
+
+        // Get the broadcast name from the block
+        let broadcastName = null;
+        if (block.type === "event_whenbroadcastreceived") {
+          const fieldRow = block.inputList?.[0]?.fieldRow;
+          broadcastName = fieldRow?.find((input) => input.name === "BROADCAST_OPTION")?.getText();
+        } else {
+          // For broadcast/broadcastandwait, get the name from the child menu block
+          const broadcastInput = block.getChildren()[0];
+          if (broadcastInput && broadcastInput.type === "event_broadcast_menu") {
+            broadcastName = broadcastInput.inputList[0].fieldRow[0].getText();
+          }
+        }
+
+        if (broadcastName) {
+          // Find the broadcast item by name
+          const broadcastItem = findBar.dropdown.items.find(
+            (i) => i.data && i.data.cls === "broadcast" && i.data.eventName === broadcastName
+          );
+          if (broadcastItem) {
+            findBar.dropdown.onItemClick(broadcastItem, block);
+            return true;
+          }
+        }
+        return true;
+      }
+
+      if (block.type === "event_whenflagclicked") {
+        let id = block.id;
+        findBar.showDropDown(id, block, true);
+        findBar.selVarID = id;
+        return true;
+      }
+
+      // Middle-click on any clone block shows all 3 types filtered to the relevant sprite
+      if (BlockTypes.isCloneBlock(block.type)) {
+        const runtime = addon.tab.traps.vm.runtime;
+
+        // Extract target sprite for filtering
+        let targetSpriteName = null;
+        let targetSpriteId = null;
+
+        // Get the block's sprite (works for both Blockly blocks and BlockInstance)
+        const blockTargetId = block.targetId || findBar.utils.getEditingTarget().id;
+
+        if (block.type === "control_create_clone_of") {
+          // Get the sprite being cloned (where the clone hats will run)
+          const cloneInput = block.getChildren()[0];
+          if (cloneInput && cloneInput.type === "control_create_clone_of_menu") {
+            const field = cloneInput.inputList?.[0]?.fieldRow?.[0];
+            targetSpriteName = field?.getText?.() || field?.value_ || null;
+
+            // Handle "myself" - use the block's current sprite (the one being cloned)
+            if (targetSpriteName === "myself" || targetSpriteName === "_myself_") {
+              const currentTarget = runtime.getTargetById(blockTargetId);
+              targetSpriteName = currentTarget?.getName() || "myself";
+              targetSpriteId = blockTargetId;
+            } else if (targetSpriteName) {
+              // Resolve sprite name to ID
+              const targetSprite = runtime.targets.find((t) => t.getName() === targetSpriteName && t.isOriginal);
+              targetSpriteId = targetSprite?.id;
+            }
+          }
+        } else {
+          // For 'when I start as clone' or 'delete this clone', use the block's own sprite
+          const currentTarget = runtime.getTargetById(blockTargetId);
+          targetSpriteName = currentTarget?.getName();
+          targetSpriteId = blockTargetId;
+        }
+
+        if (targetSpriteId && targetSpriteName) {
+          // Rebuild dropdown with forceAllSprites to get all clone blocks
+          findBar.showDropDown(null, null, true, true);
+
+          // Collect ALL three types of blocks filtered to this sprite
+          const cloneHatBlocks = (findBar.dropdown._cachedCloneHatBlocks || []).filter(
+            (b) => (b.targetId || findBar.utils.getEditingTarget().id) === targetSpriteId
+          );
+          const cloneDeleteBlocks = (findBar.dropdown._cachedCloneDeleteBlocks || []).filter(
+            (b) => (b.targetId || findBar.utils.getEditingTarget().id) === targetSpriteId
+          );
+
+          // For create blocks, include those targeting this sprite (by name)
+          const cloneCreateBlocks = findBar.dropdown._cachedCloneCreateBySprite?.get(targetSpriteName) || [];
+
+          // Combine all three types
+          const allCloneBlocks = [...cloneHatBlocks, ...cloneCreateBlocks, ...cloneDeleteBlocks];
+
+          // Create a synthetic item for the carousel
+          const filteredItem = {
+            data: {
+              cls: "clone-hat",
+              procCode: msg("clone-of-sprite", { sprite: targetSpriteName }),
+              labelID: null,
+              targetSprite: targetSpriteName,
+            },
+            className: "sa-block-color sa-block-color-control",
+            classList: { add: () => {}, remove: () => {} },
+          };
+
+          // Build carousel with all three types of blocks for this sprite
+          findBar.dropdown.carousel.build(filteredItem, allCloneBlocks, block);
+          return true;
+        }
+        return false;
+      }
+    }
+    return false;
+  }
+
+  // Event listeners that need cleanup
+  const findBarActivateHandler = (e) => {
+    if (!addon.self.disabled && e.detail.blockId) {
+      findBar.showDropDown(e.detail.blockId, e.detail.instanceBlock, true);
+    }
+  };
+
+  const variableFieldMousedownHandler = (e) => {
+    if (addon.self.disabled || e.button !== 1) return;
+
+    // Check if clicking on a variable field
+    let target = e.target;
+    while (target && !target.classList?.contains("blocklyBlockCanvas")) {
+      if (target.getAttribute?.("data-argument-type")) {
+        // Found a variable field - find the parent block
+
+        let blockEl = target;
+        while (blockEl && !blockEl.classList?.contains("blocklyDraggable")) {
+          blockEl = blockEl.parentElement;
+        }
+
+        if (blockEl) {
+          const blockId = blockEl.getAttribute("data-id");
+          const workspace = addon.tab.traps.getWorkspace();
+          const block = workspace.getBlockById(blockId);
+
+          if (handleBlockExplore(block)) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+        }
+        break;
+      }
+      target = target.parentElement;
+    }
+  };
+
+  // Store original Blockly method for cleanup
   const doBlockClickMethodName = Blockly.registry ? "doBlockClick" : "doBlockClick_";
   const _doBlockClick_ = Blockly.Gesture.prototype[doBlockClickMethodName];
-  Blockly.Gesture.prototype[doBlockClickMethodName] = function () {
+
+  const doBlockClickOverride = function () {
     const event = Blockly.registry ? this.mostRecentEvent : this.mostRecentEvent_;
     if (!addon.self.disabled && (event.button === 1 || event.shiftKey)) {
-      // Wheel button...
-      // Intercept clicks to allow jump to...?
+      // Wheel button or shift-click - directly update carousel without opening dropdown
       let block = Blockly.registry ? this.startBlock : this.startBlock_;
-      for (; block; block = block.getSurroundParent()) {
-        if (block.type === "procedures_definition" || (!this.jumpToDef && block.type === "procedures_call")) {
-          let id = block.id ? block.id : block.getId ? block.getId() : null;
 
-          findBar.findInput.focus();
-          findBar.showDropDown(id);
-
-          return;
-        }
-
-        if (
-          block.type === "data_variable" ||
-          block.type === "data_changevariableby" ||
-          block.type === "data_setvariableto"
-        ) {
-          let id = block.getVars()[0];
-
-          findBar.findInput.focus();
-          findBar.showDropDown(id, block);
-
-          findBar.selVarID = id;
-
-          return;
-        }
-
-        if (
-          block.type === "event_whenbroadcastreceived" ||
-          block.type === "event_broadcastandwait" ||
-          block.type === "event_broadcast"
-        ) {
-          // todo: actually index the broadcasts...!
-          let id = block.id;
-
-          findBar.findInput.focus();
-          findBar.showDropDown(id, block);
-
-          findBar.selVarID = id;
-
-          return;
+      // If no block found but we have a startField, try to get the block from the field
+      if (!block) {
+        const startField = Blockly.registry ? this.startField : this.startField_;
+        if (startField) {
+          block = startField.getSourceBlock ? startField.getSourceBlock() : startField.sourceBlock_;
         }
       }
+
+      if (handleBlockExplore(block)) {
+        return;
+      }
+      return; // Block not handled, skip default click behavior for middle/shift click
     }
 
     _doBlockClick_.call(this);
   };
+
+  // Enable addon
+  const enableAddon = () => {
+    // Listen for events from jump-to-def addon to activate carousel
+    document.addEventListener("scratch-addons-find-bar-activate", findBarActivateHandler);
+
+    // Capture middle-clicks on variable fields before Blockly processes them
+    document.addEventListener("mousedown", variableFieldMousedownHandler, true);
+
+    // Override Blockly doBlockClick
+    Blockly.Gesture.prototype[doBlockClickMethodName] = doBlockClickOverride;
+  };
+
+  // Disable addon
+  const disableAddon = () => {
+    // Remove event listeners
+    document.removeEventListener("scratch-addons-find-bar-activate", findBarActivateHandler);
+    document.removeEventListener("mousedown", variableFieldMousedownHandler, true);
+
+    // Restore original Blockly method
+    Blockly.Gesture.prototype[doBlockClickMethodName] = _doBlockClick_;
+  };
+
+  // Add context menu items for exploring blocks
+  addon.tab.createBlockContextMenu(
+    (items, block) => {
+      if (addon.self.disabled) return items;
+
+      // Check if this block type can be explored
+      if (canBlockBeExplored(block)) {
+        items.push({
+          enabled: true,
+          text: msg("explore-usages"),
+          callback: () => handleBlockExplore(block),
+        });
+      }
+
+      return items;
+    },
+    { blocks: true, flyout: true }
+  );
+
+  // Listen for addon state changes
+  addon.self.addEventListener("disabled", disableAddon);
+  addon.self.addEventListener("reenabled", enableAddon);
+
+  // Initial enable
+  enableAddon();
 
   addon.tab.redux.initialize();
   addon.tab.redux.addEventListener("statechanged", (e) => {

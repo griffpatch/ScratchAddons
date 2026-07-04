@@ -1,4 +1,4 @@
-@import url("../editor-theme3/compatibility.css");
+﻿@import url("../editor-theme3/compatibility.css");
 
 .sa-find-bar {
   display: flex;
@@ -7,7 +7,8 @@
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
   width: 100%;
   height: 100%;
-  margin-left: 1em;
+  margin-left: 8px;
+  gap: 8px;
 }
 .sa-find-bar[hidden] {
   display: none;
@@ -19,26 +20,29 @@
   height: 2rem;
   width: 100%;
   max-width: 16em;
+  margin-top: -10px;
 }
 
 .sa-find-dropdown-out {
   display: block;
-  top: -6px;
   z-index: 100;
   width: 100%;
   max-width: 16em;
   position: relative;
-  padding: 4px;
-  border: none;
-  border-radius: 4px;
-  margin-top: 6px;
+  padding: 3px 6px 6px;
+  border: 6px solid transparent;
+  border-radius: 6px;
 }
 
 .sa-find-dropdown-out.visible {
   position: absolute;
   width: 16em;
-  box-shadow: 0px 0px 8px 1px rgba(0, 0, 0, 0.3);
+  box-shadow: 0px 0px 12px 1px rgba(0, 0, 0, 0.025);
   background-color: white;
+
+  /* border: 6px solid #e6f0ff; */
+  /* outline: 1px solid #c4ccd9; */
+  outline: 3px solid #c4ccd991;
 }
 
 /* We need to modify Scratch styles so that the place where the find bar is injected */
@@ -54,12 +58,35 @@
   width: 100%;
   box-sizing: border-box !important;
   /* !important required for extension, because CSS injection method (and hence order) differs from addon */
-  height: 1.5rem;
+  height: 1.7rem;
 
   /* Change Scratch default styles */
-  border-radius: 0.25rem;
+  border-radius: 4px;
   font-size: 0.75rem;
-  padding-left: 0.4em;
+  padding: 8px 2em 8px 8px;
+  border: none;
+
+  &::placeholder {
+    opacity: 0.5;
+  }
+}
+
+.sa-find-input-wrap {
+  position: relative;
+}
+
+.sa-find-all-sprites-checkbox {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  z-index: 101;
+  accent-color: #575e75;
+  pointer-events: auto;
+  transform: translateY(-50%);
+  opacity: 0.6;
 }
 
 input.sa-find-input:focus /* must be specific enough to override editor-dark-mode */ {
@@ -71,15 +98,51 @@ input.sa-find-input:focus /* must be specific enough to override editor-dark-mod
   display: none;
   position: relative;
   padding: 0.2em 0;
+  padding-right: 6px;
   font-size: 0.75rem;
   line-height: 1;
-  overflow-y: auto;
+  overflow-y: overlay;
   min-height: 128px;
   max-height: 65vh;
   user-select: none;
-  max-width: 100%;
-  margin-top: 6px;
+  max-width: calc(100% + 11px);
+  margin: 6px -11px 0 0;
   border: none;
+
+  /* Prevent scrollbar from causing content reflow */
+  scrollbar-gutter: stable;
+
+  /* Modern thin scrollbar - Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+/* Webkit scrollbar styling for Chrome/Safari - Scratch-style */
+.sa-find-dropdown::-webkit-scrollbar {
+  width: 12px;
+  height: 0;
+}
+
+.sa-find-dropdown::-webkit-scrollbar-track {
+  background: none;
+}
+
+.sa-find-dropdown::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+  border: 2.5px solid white;
+  background-clip: padding-box;
+  min-height: 40px;
+}
+
+.sa-find-dropdown::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.sa-find-dropdown::-webkit-scrollbar-button:single-button {
+  display: block;
+  height: 0;
+  width: 0;
 }
 
 .sa-find-dropdown-out.visible > .sa-find-dropdown {
@@ -87,36 +150,109 @@ input.sa-find-input:focus /* must be specific enough to override editor-dark-mod
 }
 
 .sa-find-dropdown > li {
-  display: block;
-  padding: 0.5em 0.3em;
-  white-space: nowrap;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  /*  padding: 0.5em 0.75em;*/
+  padding: 0.4rem 0.5rem;
   margin: 0;
   font-weight: bold;
+  border-radius: 0.25rem;
+  transition: background-color 0.1s ease;
+}
+
+.sa-find-item-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
 }
 
-.sa-find-dropdown > li > b {
+.sa-find-item-count {
+  flex-shrink: 0;
+  margin-left: auto;
+  /* padding: 2px 7px; */
+  /* border-radius: 10px; */
+  /* font-size: 0.75em; */
+  /* font-weight: 600; */
+  /* min-width: 20px; */
+  text-align: center;
+  /* color: var(--sa-block-colored-text); */
+  /* background-color: white; */
+  opacity: 0.85;
+}
+
+.sa-find-dropdown > li > .sa-find-item-text > b {
   background-color: #aaffaa;
   color: black;
+  padding: 0.1em 0.2em;
+  border-radius: 0.15rem;
+}
+
+.sa-find-dropdown > li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Group headings */
+.sa-find-dropdown > li.sa-find-heading {
+  display: flex;
+  align-items: center;
+  text-align: center;
+
+  font-size: 0.55rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #8f96a3;
+  /* color: #333; */
+  /*padding: 0.75em 0.75em 0.35em 0.75em;*/
+  margin: 0.5em 0;
+  cursor: default;
+  letter-spacing: 0.05em;
+  border-radius: 0;
+  background-color: transparent;
+}
+
+.sa-find-dropdown > li.sa-find-heading:first-child {
+  margin-top: 0;
+  padding-top: 0.35em;
+}
+
+.sa-find-dropdown > li.sa-find-heading:hover {
+  background-color: transparent;
+  color: #8f96a3;
+}
+
+.sa-find-heading::before,
+.sa-find-heading::after {
+  content: "";
+  flex: 1;
+  border-bottom: 1px solid #ccc;
+  margin: 0 0.5em;
 }
 
 /* Drop down items */
-.sa-find-dropdown > li:hover,
-.sa-find-dropdown > li.sel {
-  color: var(--sa-block-text-on-bright-background);
+.sa-find-dropdown > li:hover {
+  background-color: rgba(0, 0, 0, 0.05);
   cursor: pointer;
 }
 
-.sa-find-dropdown > li::before {
-  content: "\25CF "; /* ● */
+.sa-find-dropdown > li.sel {
+  color: var(--sa-block-text-on-bright-background);
+  cursor: pointer;
 }
 
 .sa-find-flag {
   color: #4cbf56;
 }
 /* .sa-find-dropdown added for specificity */
-.sa-find-dropdown > .sa-find-flag:hover,
+.sa-find-dropdown > .sa-find-flag:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
 .sa-find-dropdown > .sa-find-flag.sel {
   background-color: #4cbf56;
   color: white;
@@ -125,7 +261,6 @@ input.sa-find-input:focus /* must be specific enough to override editor-dark-mod
 .sa-find-dropdown .sa-block-color {
   color: var(--sa-block-colored-text);
 }
-.sa-find-dropdown .sa-block-color:hover,
 .sa-find-dropdown .sa-block-color.sel {
   background-color: var(--sa-block-bright-background);
 }
@@ -141,9 +276,299 @@ input.sa-find-input:focus /* must be specific enough to override editor-dark-mod
 }
 
 .sa-find-carousel-control {
-  padding: 0 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  margin: -4px 0;
 }
 
 .sa-find-carousel-control:hover {
   color: #ffff80;
+}
+
+.sa-find-carousel-count {
+  cursor: pointer;
+  padding: 0 2px;
+  font-weight: 600;
+}
+
+.sa-find-carousel-count:hover {
+  text-decoration: underline;
+}
+
+span.sa-find-nav-controls {
+  padding-left: 4px;
+}
+
+.sa-find-selected-label {
+  display: none;
+  flex-shrink: 0;
+  padding: 4px 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #575e75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 128px;
+}
+
+@keyframes sa-find-flash {
+  0%,
+  50%,
+  100% {
+    opacity: 1;
+  }
+  25%,
+  75% {
+    opacity: 0.2;
+  }
+}
+
+.sa-find-nav-controls {
+  display: none;
+  flex-shrink: 0;
+}
+
+.sa-find-nav-controls[style*="inline-block"] {
+  animation: sa-find-flash 0.4s ease-in-out;
+}
+
+.sa-find-nav-controls .sa-find-carousel {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  background-color: #4c97ff;
+  color: white;
+  padding: 2px 0;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  height: 1.7rem;
+}
+
+/* Apply block category colors to the carousel in navigation */
+.sa-find-nav-controls .sa-find-carousel.sa-find-flag {
+  background-color: #4cbf56;
+}
+.sa-find-nav-controls .sa-find-carousel.sa-block-color-events {
+  background-color: var(--editorTheme3-event-primary, #ffbf00);
+}
+.sa-find-nav-controls .sa-find-carousel.sa-block-color-more {
+  background-color: var(--editorTheme3-more-primary, #ff6680);
+}
+.sa-find-nav-controls .sa-find-carousel.sa-block-color-data {
+  background-color: var(--editorTheme3-data-primary, #ff8c1a);
+}
+.sa-find-nav-controls .sa-find-carousel.sa-block-color-data-lists {
+  background-color: var(--editorTheme3-data_lists-primary, #ff661a);
+}
+.sa-find-nav-controls .sa-find-carousel.sa-block-color-looks {
+  background-color: var(--editorTheme3-looks-primary, #9966ff);
+}
+.sa-find-nav-controls .sa-find-carousel.sa-block-color-sounds {
+  background-color: var(--editorTheme3-sounds-primary, #cf63cf);
+}
+.sa-find-nav-controls .sa-find-carousel.sa-block-color-control {
+  background-color: var(--editorTheme3-control-primary, #ffab19);
+}
+
+.sa-find-clear-btn {
+  display: none;
+  flex-shrink: 0;
+  background-color: transparent;
+  color: #8f96a3;
+  border: none;
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  margin-left: -6px;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.sa-find-clear-btn:hover {
+  background-color: #ff6680;
+  color: white;
+}
+
+.sa-find-input[readonly] {
+  background-color: #e9f1fc;
+  cursor: default;
+}
+
+/* Highlighted blocks in the editor */
+.sa-find-highlighted {
+}
+
+/* Sprite switch notification */
+.sa-find-sprite-notification {
+  position: fixed;
+  background-color: rgba(77, 151, 255, 0.95);
+  color: white;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 0.75rem;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 99999;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sa-find-sprite-notification-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.sa-find-sprite-notification-hiding {
+  opacity: 0;
+  transform: translate(-50%, 4px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+/* ── Carousel info panel (click-triggered table) ───────────────────── */
+
+.sa-find-info-panel {
+  position: fixed;
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  outline: 2px solid rgba(196, 204, 217, 0.57);
+  padding: 6px 4px;
+  z-index: 99999;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 0.75rem;
+  user-select: none;
+}
+
+.sa-find-info-table {
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+
+.sa-find-info-table th,
+.sa-find-info-table td {
+  padding: 3px 8px;
+  text-align: center;
+}
+
+.sa-find-info-table td:first-child {
+  text-align: left;
+}
+
+.sa-find-info-col-header {
+  font-weight: 600;
+  color: #575e75;
+  font-size: 0.7rem;
+}
+
+.sa-find-info-col-header label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.sa-find-info-sprite-cell {
+  text-align: left;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sa-find-info-sprite-cell label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  color: #575e75;
+}
+
+.sa-find-info-checkbox {
+  cursor: pointer;
+  accent-color: #4c97ff;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.sa-find-info-count-cell {
+  color: #575e75;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+.sa-find-info-count-zero {
+  opacity: 0.3;
+}
+
+.sa-find-info-table tbody tr:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+/* ── Instances table ─────────────────────────────────────────────── */
+
+.sa-find-info-divider {
+  border: none;
+  border-top: 1px solid #e0e4ec;
+  margin: 5px 4px 3px;
+}
+
+.sa-find-info-instances-wrap {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.sa-find-info-instances-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.sa-find-info-instances-table thead th {
+  position: sticky;
+  top: 0;
+  background: white;
+  font-weight: 600;
+  color: #575e75;
+  font-size: 0.7rem;
+  padding: 2px 8px 4px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.sa-find-info-instance-row {
+  cursor: pointer;
+}
+
+.sa-find-info-instance-row:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+.sa-find-info-inst-sprite,
+.sa-find-info-inst-hat,
+.sa-find-info-inst-block {
+  padding: 3px 8px;
+  color: #575e75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.sa-find-info-inst-sprite {
+  font-weight: 600;
 }
