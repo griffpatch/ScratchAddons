@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Outer border -->
+  <rect x="2" y="2" width="20" height="20" rx="2"/>
+  <!-- Grid lines vertical -->
+  <line x1="9" y1="2" x2="9" y2="22"/>
+  <line x1="15" y1="2" x2="15" y2="22"/>
+  <!-- Grid lines horizontal -->
+  <line x1="2" y1="9" x2="22" y2="9"/>
+  <line x1="2" y1="15" x2="22" y2="15"/>
+  <!-- Highlight one tile to suggest selection -->
+  <rect x="9" y="2" width="6" height="7" rx="0" fill="white" stroke="none" opacity="0.7"/>
+</svg>

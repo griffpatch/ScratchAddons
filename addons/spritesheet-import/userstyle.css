@@ -1,0 +1,488 @@
+@import url("../../libraries/common/cs/react-tooltip.css");
+
+/* Show the menu button tooltip on hover (Scratch keeps it visibility:hidden by default). */
+.sa-ss-menu-btn:hover + .sa-ss-tooltip {
+  visibility: visible;
+}
+
+/* ─── Modal backdrop ─────────────────────────────────────────────────────── */
+
+.sa-ss-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--editorDarkMode-popup, hsla(215, 100%, 65%, 0.9));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+/* ─── Dialog container ───────────────────────────────────────────────────── */
+
+.sa-ss-dialog {
+  background: var(--editorDarkMode-selector, #fff);
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  outline: 4px solid hsla(0, 100%, 100%, 0.25);
+  color: var(--editorDarkMode-selector-text, #575e75);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 88vh;
+  max-height: 88vh;
+  max-width: min(92vw, 1000px);
+  overflow: hidden;
+  padding: 0 0 16px;
+  width: 960px;
+}
+
+/* ─── Modal header ───────────────────────────────────────────────────────── */
+
+.sa-ss-header {
+  align-items: center;
+  background: var(--editorDarkMode-menuBar, #855cd6);
+  border-bottom: 1px solid var(--editorDarkMode-menuBar-border, transparent);
+  border-radius: 0.5rem 0.5rem 0 0;
+  color: var(--editorDarkMode-menuBar-text, #fff);
+  display: flex;
+  flex-shrink: 0;
+  justify-content: space-between;
+  padding: 12px 12px 12px 20px;
+}
+
+.sa-ss-title {
+  color: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.sa-ss-close-btn {
+  align-items: center;
+  background: var(--editorDarkMode-menuBar-border, rgba(255, 255, 255, 0.25));
+  border: none;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--editorDarkMode-menuBar-border, rgba(255, 255, 255, 0.25));
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-shrink: 0;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  width: 28px;
+}
+
+.sa-ss-close-btn:hover {
+  background: var(--editorDarkMode-menuBar-border, rgba(255, 255, 255, 0.4));
+  box-shadow: 0 0 0 2px var(--editorDarkMode-menuBar-border, rgba(255, 255, 255, 0.4));
+}
+
+/* ─── Two-column body ────────────────────────────────────────────────────── */
+
+.sa-ss-body {
+  display: flex;
+  flex: 1;
+  gap: 16px;
+  min-height: 0; /* required for flex children to observe overflow */
+  padding: 0 24px;
+}
+
+/* ─── Left column: image preview ─────────────────────────────────────────── */
+
+.sa-ss-preview-col {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* ─── Zoom bar ───────────────────────────────────────────────────────────── */
+
+.sa-ss-zoom-bar {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+  height: 28px; /* fixed height prevents 1px reflow when buttons change filter/state */
+}
+
+.sa-ss-toolbar-divider {
+  background: var(--editorDarkMode-border, #ddd);
+  height: 18px;
+  margin: 0 4px;
+  width: 1px;
+}
+
+.sa-ss-zoom-btn {
+  font-size: 1rem;
+  line-height: 1;
+  padding: 2px 8px;
+}
+
+.sa-ss-zoom-label {
+  font-size: 0.8rem;
+  min-width: 38px;
+  text-align: center;
+}
+
+/* ─── Image preview + canvas overlay ─────────────────────────────────────── */
+
+.sa-ss-preview-wrap {
+  background: repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 0 0 / 16px 16px;
+  border: 1px solid var(--editorDarkMode-border, #ddd);
+  border-radius: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.sa-ss-preview-wrap.sa-ss-panning {
+  cursor: grabbing;
+}
+
+/*
+ * The inner div is sized via JS to exactly imageWidth×zoom by imageHeight×zoom.
+ * display:inline-block prevents it from stretching to fill the wrap, so the
+ * wrap's scrollbars accurately reflect the zoomed content size.
+ */
+.sa-ss-preview-inner {
+  display: inline-block;
+  position: relative;
+}
+
+.sa-ss-preview-img {
+  display: block;
+  image-rendering: pixelated;
+  /* Width and height are set explicitly by JS to imageWidth * zoom. */
+}
+
+/*
+ * Zero-size sticky anchor: stays at the top-left corner of the scroll container's
+ * visible area as the user scrolls. The viewport canvas sits absolutely inside it,
+ * covering exactly the visible region of the wrap. This keeps the canvas bounded by
+ * the viewport rather than the (potentially enormous) zoomed image size.
+ */
+.sa-ss-canvas-sticky-anchor {
+  /*
+   * contain:layout prevents the absolutely-positioned canvas inside this anchor
+   * from extending the scroll container's scrollable overflow area. Without it,
+   * the canvas (sized to clientWidth×clientHeight) would inflate scrollHeight,
+   * triggering a ResizeObserver → scrollbar → resize → scrollbar cycle.
+   */
+  contain: layout;
+  height: 0;
+  left: 0;
+  position: sticky;
+  top: 0;
+  width: 0;
+  z-index: 1;
+}
+
+/*
+ * Viewport-sized canvas overlay. Width and height are set by JS to the scroll
+ * container's clientWidth/clientHeight × devicePixelRatio. Drawing coordinates are
+ * offset by the container's scrollLeft/scrollTop so the correct tiles are visible.
+ */
+.sa-ss-overlay {
+  cursor: crosshair;
+  image-rendering: pixelated;
+  left: 0;
+  position: absolute;
+  top: 0;
+}
+
+/* ─── Right column: controls ─────────────────────────────────────────────── */
+
+.sa-ss-controls-col {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 18px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* Push the panel down to align with the top of the preview image (below the zoom bar). */
+  padding-top: 32px;
+  width: 220px;
+}
+
+/* ─── Selection count (plain text in toolbar) ───────────────────────────── */
+
+.sa-ss-selection-count {
+  color: var(--editorDarkMode-selector-text, #575e75);
+  font-size: 0.8rem;
+  margin-left: 4px;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+/* ─── Shared field label style ───────────────────────────────────────────── */
+
+.sa-ss-field-label {
+  color: var(--editorDarkMode-selector-text, #575e75);
+  display: block;
+  font-size: 0.8rem;
+  margin-bottom: 3px;
+}
+
+/* ─── Tile size section ──────────────────────────────────────────────────── */
+
+.sa-ss-tile-size-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sa-ss-tile-wh-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.sa-ss-tile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sa-ss-tile-field > span {
+  color: var(--editorDarkMode-selector-text, #575e75);
+  font-size: 0.8rem;
+}
+
+.sa-ss-spinner {
+  background: var(--editorDarkMode-input, #fff);
+  border: 1px solid var(--editorDarkMode-border, #ccc);
+  color: var(--editorDarkMode-input-text, #575e75);
+  border-radius: 4px;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  text-align: center;
+  width: 100%;
+}
+
+.sa-ss-full-width-btn {
+  width: 100%;
+}
+
+.sa-ss-detect-msg {
+  font-size: 0.8rem;
+  font-style: italic;
+  opacity: 0.75;
+  width: 100%;
+}
+
+@keyframes sa-ss-spin {
+  to { transform: rotate(360deg); }
+}
+
+/*
+ * Spinner shown while the analysis worker is running. The ::before pseudo-element
+ * creates a small rotating ring that sits inline before the "Analyzing…" text.
+ */
+.sa-ss-detect-msg.sa-ss-loading::before {
+  animation: sa-ss-spin 0.6s linear infinite;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  content: '';
+  display: inline-block;
+  height: 10px;
+  margin-right: 5px;
+  vertical-align: middle;
+  width: 10px;
+}
+
+.sa-ss-detect-msg[data-confidence="high"] {
+  color: #1a8a1a;
+}
+.sa-ss-detect-msg[data-confidence="medium"] {
+  color: #b07800;
+}
+.sa-ss-detect-msg[data-confidence="low"] {
+  color: #c0392b;
+}
+
+/* ─── Name row ───────────────────────────────────────────────────────────── */
+
+.sa-ss-name-row {
+  display: flex;
+}
+
+.sa-ss-name-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.sa-ss-name-label > span {
+  align-self: flex-start;
+  color: var(--editorDarkMode-selector-text, #575e75);
+  font-size: 0.8rem;
+}
+
+.sa-ss-name-input {
+  background: var(--editorDarkMode-input, #fff);
+  border: 1px solid var(--editorDarkMode-border, #ccc);
+  border-radius: 4px;
+  box-sizing: border-box;
+  color: var(--editorDarkMode-input-text, #575e75);
+  padding: 4px 8px;
+  width: 100%;
+}
+
+/* ─── Replace-existing checkbox ──────────────────────────────────────────── */
+
+.sa-ss-replace-row {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: 0.85rem;
+  gap: 6px;
+}
+
+/* ─── Anchor picker ──────────────────────────────────────────────────────── */
+
+.sa-ss-anchor-row {
+  align-items: flex-start;
+  border-top: 1px solid var(--editorDarkMode-border, #e0e0e0);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+}
+
+.sa-ss-anchor-header {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.sa-ss-anchor-label {
+  color: var(--editorDarkMode-selector-text, #575e75);
+  font-size: 0.8rem;
+}
+
+.sa-ss-anchor-toggle {
+  background: none;
+  border: 1px solid #4c9fec;
+  border-radius: 3px;
+  color: #4c9fec;
+  cursor: pointer;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 1px 5px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sa-ss-anchor-toggle:hover {
+  filter: brightness(0.85);
+}
+
+.sa-ss-anchor-toggle-active {
+  background: #4c9fec;
+  color: #fff;
+}
+
+.sa-ss-anchor-grid {
+  display: grid;
+  gap: 4px;
+  grid-template-columns: repeat(3, 20px);
+  grid-template-rows: repeat(3, 20px);
+}
+
+/* Padding spinner sits inline below the anchor grid, inside the anchor section. */
+.sa-ss-anchor-padding-row {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+.sa-ss-anchor-padding-input {
+  width: 56px;
+}
+
+.sa-ss-anchor-btn {
+  background: var(--editorDarkMode-border, #ccc);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  height: 14px;
+  margin: auto;
+  padding: 0;
+  transition: background 0.15s, transform 0.1s;
+  width: 14px;
+}
+
+.sa-ss-anchor-btn:hover {
+  background: #4c9fec;
+  transform: scale(1.25);
+}
+
+.sa-ss-anchor-btn.sa-ss-anchor-selected {
+  background: #4c9fec;
+  box-shadow: 0 0 0 2px rgba(76, 159, 236, 0.45);
+  transform: scale(1.25);
+}
+
+/* ─── Footer ─────────────────────────────────────────────────────────────── */
+
+.sa-ss-footer {
+  align-items: center;
+  border-top: 1px solid var(--editorDarkMode-border, #e0e0e0);
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 12px 24px 0;
+}
+
+.sa-ss-keep-open-label {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: 0.85rem;
+  gap: 6px;
+  /* Push Cancel / Import to the right */
+  margin-right: auto;
+}
+
+/* ─── Buttons ────────────────────────────────────────────────────────────── */
+
+.sa-ss-btn {
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  padding: 6px 14px;
+  /* Pre-promote to a compositing layer so the hover filter doesn't trigger
+     a mid-interaction layer creation that can jiggle adjacent elements. */
+  will-change: filter;
+}
+
+.sa-ss-btn:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.sa-ss-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.sa-ss-btn-secondary {
+  background: var(--editorDarkMode-tab, #e0e0e0);
+  border: 1px solid var(--editorDarkMode-menuBar-border, transparent);
+  color: var(--editorDarkMode-selector-text, inherit);
+}
+
+
+
+.sa-ss-btn-primary {
+  background: var(--editorDarkMode-primary, hsla(260, 60%, 60%, 1));
+  color: var(--editorDarkMode-primary-text, #fff);
+  font-weight: 600;
+}
+
+
