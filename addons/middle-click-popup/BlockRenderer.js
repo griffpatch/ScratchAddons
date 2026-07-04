@@ -62,8 +62,9 @@ const BlockShapes = {
   Hat: {
     padding: 8,
     minWidth: 60,
+    // Dome curve: cubic bezier from (-4,-24) to (56,-24) peaking ~8px above the block top
     backgroundPath: (width) =>
-      `m -8 -20 A 4 4 0 0 1 -4 -24 H ${width} a 4 4 0 0 1 4 4 v 40 a 4 4 0 0 1 -4 4 H 40 c -2 0 -3 1 -4 2 l -4 4 c -1 1 -2 2 -4 2 h -12 c -2 0 -3 -1 -4 -2 l -4 -4 c -1 -1 -2 -2 -4 -2 H -4 a 4 4 0 0 1 -4 -4 z`,
+      `m -8 -20 A 4 4 0 0 1 -4 -24 C 16 -35 36 -35 56 -24 H ${width} a 4 4 0 0 1 4 4 v 40 a 4 4 0 0 1 -4 4 H 40 c -2 0 -3 1 -4 2 l -4 4 c -1 1 -2 2 -4 2 h -12 c -2 0 -3 -1 -4 -2 l -4 -4 c -1 -1 -2 -2 -4 -2 H -4 a 4 4 0 0 1 -4 -4 z`,
   },
 
   // eg delete this clone
@@ -135,14 +136,45 @@ function getShapeInfo(shape, isVertical) {
  */
 export function getBlockHeight(block) {
   switch (block.typeInfo.shape) {
-    case BlockShape.End:
     case BlockShape.Hat:
+      return 72; // 64px visual + 4px margin top and bottom
+    case BlockShape.End:
     case BlockShape.Stack:
-      return 62;
+      return 64; // 56px visual + 4px margin top and bottom
     case BlockShape.Boolean:
     case BlockShape.Round:
-      return 48;
+      return 48; // 40px visual + 4px margin top and bottom
   }
+  return 0;
+}
+
+/**
+ * Returns the y offset within a row where the block's center (y=0 in SVG) should land,
+ * centering the block visual within the row.
+ * @param {BlockInstance} block
+ * @returns {number}
+ */
+export function getBlockCenterOffset(block) {
+  switch (block.typeInfo.shape) {
+    case BlockShape.Hat:
+      return 36; // row 72 / 2, dome and notch are symmetric around y=0
+    case BlockShape.End:
+    case BlockShape.Stack:
+      return 28; // row 64 / 2, minus 4 for notch asymmetry (top -24, bottom +32, center at +4)
+    case BlockShape.Boolean:
+    case BlockShape.Round:
+      return 24; // row 48 / 2, symmetric
+  }
+  return 30;
+}
+
+/**
+ * Returns the y offset within a row where the selection background rect should start.
+ * The background covers the full row height, so this is 0.
+ * @param {BlockInstance} block
+ * @returns {number}
+ */
+export function getBlockBgOffset(_block) {
   return 0;
 }
 
