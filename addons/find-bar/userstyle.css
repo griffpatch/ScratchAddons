@@ -385,7 +385,9 @@ span.sa-find-nav-controls {
   cursor: pointer;
   padding: 0;
   margin-left: -6px;
-  transition: background-color 0.2s ease, color 0.2s ease;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
 }
 
 .sa-find-clear-btn:hover {
@@ -417,7 +419,9 @@ span.sa-find-nav-controls {
   pointer-events: none;
   opacity: 0;
   transform: translate(-50%, -4px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
   white-space: nowrap;
   max-width: 200px;
   overflow: hidden;
@@ -432,7 +436,9 @@ span.sa-find-nav-controls {
 .sa-find-sprite-notification-hiding {
   opacity: 0;
   transform: translate(-50%, 4px);
-  transition: opacity 0.3s ease, transform 0.3s ease;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
 }
 
 /* ── Carousel info panel (click-triggered table) ───────────────────── */

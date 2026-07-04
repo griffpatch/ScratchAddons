@@ -174,9 +174,14 @@ export default class SpriteSheetDialog {
       textContent: "0 / 0",
     });
     zoomBar.append(
-      this._zoomOutBtn, this._zoomLabel, this._zoomInBtn, this._zoomResetBtn,
+      this._zoomOutBtn,
+      this._zoomLabel,
+      this._zoomInBtn,
+      this._zoomResetBtn,
       zoomDivider,
-      this._selectAllBtn, this._clearAllBtn, this._selectionCounter,
+      this._selectAllBtn,
+      this._clearAllBtn,
+      this._selectionCounter
     );
 
     // Preview area: scrollable wrap → inner div (inline-block at zoom size) → img + canvas
@@ -220,9 +225,7 @@ export default class SpriteSheetDialog {
     const tileWField = Object.assign(document.createElement("label"), {
       className: "sa-ss-tile-field",
     });
-    tileWField.append(
-      Object.assign(document.createElement("span"), { textContent: msg("tile-width") })
-    );
+    tileWField.append(Object.assign(document.createElement("span"), { textContent: msg("tile-width") }));
     this._tileWInput = Object.assign(document.createElement("input"), {
       type: "number",
       className: "sa-ss-spinner",
@@ -234,9 +237,7 @@ export default class SpriteSheetDialog {
     const tileHField = Object.assign(document.createElement("label"), {
       className: "sa-ss-tile-field",
     });
-    tileHField.append(
-      Object.assign(document.createElement("span"), { textContent: msg("tile-height") })
-    );
+    tileHField.append(Object.assign(document.createElement("span"), { textContent: msg("tile-height") }));
     this._tileHInput = Object.assign(document.createElement("input"), {
       type: "number",
       className: "sa-ss-spinner",
@@ -263,9 +264,7 @@ export default class SpriteSheetDialog {
     const nameLabel = Object.assign(document.createElement("label"), {
       className: "sa-ss-name-label",
     });
-    nameLabel.append(
-      Object.assign(document.createElement("span"), { textContent: msg("name-label") })
-    );
+    nameLabel.append(Object.assign(document.createElement("span"), { textContent: msg("name-label") }));
     this._nameInput = Object.assign(document.createElement("input"), {
       type: "text",
       className: "sa-ss-name-input",
@@ -305,7 +304,7 @@ export default class SpriteSheetDialog {
         className: "sa-ss-anchor-label",
         textContent: msg("anchor-label"),
       }),
-      this._showAnchorBtn,
+      this._showAnchorBtn
     );
     anchorRow.append(anchorHeader);
     this._anchorGrid = Object.assign(document.createElement("div"), {
@@ -339,7 +338,7 @@ export default class SpriteSheetDialog {
         className: "sa-ss-anchor-label",
         textContent: msg("padding-label"),
       }),
-      this._paddingInput,
+      this._paddingInput
     );
 
     anchorRow.append(this._anchorGrid, anchorPaddingRow);
@@ -398,7 +397,9 @@ export default class SpriteSheetDialog {
       if (e.target === this._backdrop) this._cancel();
     });
     this._importBtn.addEventListener("click", () => void this._confirm());
-    this._onKeyDown = (e) => { if (e.key === "Escape") this._cancel(); };
+    this._onKeyDown = (e) => {
+      if (e.key === "Escape") this._cancel();
+    };
     document.addEventListener("keydown", this._onKeyDown);
     this._autoDetectBtn.addEventListener("click", () => this._runAutoDetect());
     this._selectAllBtn.addEventListener("click", () => this._tileGrid?.selectAll());
@@ -494,8 +495,11 @@ export default class SpriteSheetDialog {
     if (best.confidence === "low") {
       const fallbackCols = Math.max(1, Math.floor(this._imageWidth / 32));
       const fallbackRows = Math.max(1, Math.floor(this._imageHeight / 32));
-      best = candidates.find((c) => c.cols === fallbackCols && c.rows === fallbackRows)
-        ?? { cols: fallbackCols, rows: fallbackRows, confidence: "low" };
+      best = candidates.find((c) => c.cols === fallbackCols && c.rows === fallbackRows) ?? {
+        cols: fallbackCols,
+        rows: fallbackRows,
+        confidence: "low",
+      };
     }
     this._applyGridData(best.cols, best.rows, new Set(blank));
     this._setAnalyzing(false, this._msg(`auto-detect-${best.confidence}`), best.confidence);
@@ -635,7 +639,8 @@ export default class SpriteSheetDialog {
         const mime = costume.dataFormat === "svg" ? "image/svg+xml" : "image/png";
         const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
         // Read dimensions BEFORE close()
-        const bw = bitmap.width, bh = bitmap.height;
+        const bw = bitmap.width,
+          bh = bitmap.height;
         // Scratch stores bitmap costumes at bitmapResolution× (typically 2×) for HiDPI.
         // Normalise back to logical pixels so the hash matches the tile ImageData.
         const res = costume.bitmapResolution ?? 1;
@@ -699,7 +704,12 @@ export default class SpriteSheetDialog {
     const padding = { left: this._padding, top: this._padding, right: this._padding, bottom: this._padding };
     this._tileGrid.naturalTileW = this._tileW;
     this._tileGrid.naturalTileH = this._tileH;
-    this._tileGrid.anchorPoint = SpriteSheetImporter.anchorToCenter(this._anchorIndex, this._tileW, this._tileH, padding);
+    this._tileGrid.anchorPoint = SpriteSheetImporter.anchorToCenter(
+      this._anchorIndex,
+      this._tileW,
+      this._tileH,
+      padding
+    );
     this._tileGrid.tilePadding = padding;
     const dragging = this._midDrag !== null || (this._tileGrid?.isDragging ?? false);
     this._tileGrid.showAnchor = !dragging && (this._showAnchor || this._hoverAnchor);
@@ -708,9 +718,15 @@ export default class SpriteSheetDialog {
 
   _anchorTitle(index) {
     const labels = [
-      "Top left", "Top center", "Top right",
-      "Middle left", "Center", "Middle right",
-      "Bottom left", "Bottom center", "Bottom right",
+      "Top left",
+      "Top center",
+      "Top right",
+      "Middle left",
+      "Center",
+      "Middle right",
+      "Bottom left",
+      "Bottom center",
+      "Bottom right",
     ];
     return labels[index] ?? "";
   }
@@ -824,16 +840,10 @@ export default class SpriteSheetDialog {
       this._importBtn.textContent = this._msg("too-many-tiles", { count, max: MAX_IMPORT_TILES });
       this._importBtn.disabled = true;
     } else if (replacing) {
-      this._importBtn.textContent =
-        count > 0
-          ? this._msg("replace-button", { count })
-          : this._msg("remove-all");
+      this._importBtn.textContent = count > 0 ? this._msg("replace-button", { count }) : this._msg("remove-all");
       this._importBtn.disabled = false;
     } else {
-      this._importBtn.textContent =
-        count > 0
-          ? this._msg("import-button", { count })
-          : this._msg("no-tiles");
+      this._importBtn.textContent = count > 0 ? this._msg("import-button", { count }) : this._msg("no-tiles");
       this._importBtn.disabled = count === 0;
     }
     if (this._selectionCounter) {
@@ -883,9 +893,7 @@ export default class SpriteSheetDialog {
   }
 
   _updateCancelLabel() {
-    this._cancelBtn.textContent = this._keepOpenCheckbox.checked
-      ? this._msg("close")
-      : this._msg("cancel");
+    this._cancelBtn.textContent = this._keepOpenCheckbox.checked ? this._msg("close") : this._msg("cancel");
   }
 
   _cancel() {

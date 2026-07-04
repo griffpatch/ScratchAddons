@@ -187,16 +187,23 @@ export default class SpriteSheetTileGrid {
 
   /** Hatched dark overlay for fully-transparent (unselectable) tiles. */
   _renderBlankTile(ctx, x, y, w, h) {
-    ctx.fillStyle = "rgba(0,0,0,0.06)"; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = "rgba(0,0,0,0.06)";
+    ctx.fillRect(x, y, w, h);
     // Diagonal hatching to indicate "empty / not importable".
     const sp = Math.max(6, Math.min(w, h) / 4);
     ctx.save();
-    ctx.strokeStyle = "rgba(140,140,140,0.35)"; ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(140,140,140,0.35)";
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let d = -h; d < w + h; d += sp) { ctx.moveTo(x + d, y); ctx.lineTo(x + d + h, y + h); }
-    ctx.stroke(); ctx.restore();
-    ctx.strokeStyle = "rgba(180,180,180,0.25)"; ctx.lineWidth = 0.5;
-    ctx.strokeRect(x + .5, y + .5, w - 1, h - 1);
+    for (let d = -h; d < w + h; d += sp) {
+      ctx.moveTo(x + d, y);
+      ctx.lineTo(x + d + h, y + h);
+    }
+    ctx.stroke();
+    ctx.restore();
+    ctx.strokeStyle = "rgba(180,180,180,0.25)";
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
   }
 
   /**
@@ -207,9 +214,11 @@ export default class SpriteSheetTileGrid {
    */
   _renderContentTile(ctx, x, y, w, h, sel, imp) {
     // Tint + border vary by selection state.
-    ctx.fillStyle = sel ? "rgba(30,100,255,0.22)" : "rgba(0,0,0,0.10)"; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = sel ? "rgba(30,100,255,0.22)" : "rgba(0,0,0,0.10)";
+    ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = sel ? "rgba(60,130,255,0.9)" : "rgba(180,180,180,0.5)";
-    ctx.lineWidth = sel ? 1.5 : 1; ctx.strokeRect(x + .5, y + .5, w - 1, h - 1);
+    ctx.lineWidth = sel ? 1.5 : 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
     // Tick badge: blue circle with white checkmark, top-left corner.
     // R and margin both scale with tile size (floor(minDim/9), min 7) so the
@@ -217,14 +226,23 @@ export default class SpriteSheetTileGrid {
     if (sel && w >= 20 && h >= 20) {
       const R = Math.max(7, Math.floor(Math.min(w, h) / 9));
       const m = Math.max(2, Math.floor(R / 4));
-      const cx = x + m + R, cy = y + m + R, a = R * 0.58;
-      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(40,120,255,0.9)"; ctx.fill();
-      ctx.save();
-      ctx.strokeStyle = "white"; ctx.lineWidth = Math.max(1.5, R / 5); ctx.lineCap = ctx.lineJoin = "round";
+      const cx = x + m + R,
+        cy = y + m + R,
+        a = R * 0.58;
       ctx.beginPath();
-      ctx.moveTo(cx - a * .62, cy + a * .05); ctx.lineTo(cx - a * .05, cy + a * .72); ctx.lineTo(cx + a * .78, cy - a * .62);
-      ctx.stroke(); ctx.restore();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(40,120,255,0.9)";
+      ctx.fill();
+      ctx.save();
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = Math.max(1.5, R / 5);
+      ctx.lineCap = ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(cx - a * 0.62, cy + a * 0.05);
+      ctx.lineTo(cx - a * 0.05, cy + a * 0.72);
+      ctx.lineTo(cx + a * 0.78, cy - a * 0.62);
+      ctx.stroke();
+      ctx.restore();
     }
 
     // Imported badge: green dot, top-right corner.
@@ -233,8 +251,10 @@ export default class SpriteSheetTileGrid {
     if (imp && w >= 8 && h >= 8) {
       const r = Math.max(4, Math.floor(Math.min(w, h) / 10));
       const dm = Math.max(2, Math.floor(r / 2));
-      ctx.beginPath(); ctx.arc(x + w - r - dm, y + r + dm, r, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(0,200,85,0.95)"; ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x + w - r - dm, y + r + dm, r, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,200,85,0.95)";
+      ctx.fill();
     }
   }
 
@@ -246,14 +266,21 @@ export default class SpriteSheetTileGrid {
    */
   _renderPaddingBoxes(ctx, cols, rows, tileW, tileH, scrollX, scrollY) {
     const { left: pl, top: pt, right: pr, bottom: pb } = this.tilePadding;
-    const lx = (pl / this.naturalTileW) * tileW, ty = (pt / this.naturalTileH) * tileH;
+    const lx = (pl / this.naturalTileW) * tileW,
+      ty = (pt / this.naturalTileH) * tileH;
     const bw = tileW - lx - (pr / this.naturalTileW) * tileW;
     const bh = tileH - ty - (pb / this.naturalTileH) * tileH;
-    for (const [color, lw, dash] of [["rgba(0,0,0,0.5)", 3, []], ["rgba(255,255,255,0.9)", 1, [4, 3]]]) {
+    for (const [color, lw, dash] of [
+      ["rgba(0,0,0,0.5)", 3, []],
+      ["rgba(255,255,255,0.9)", 1, [4, 3]],
+    ]) {
       ctx.save();
-      ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.setLineDash(dash);
-      this._forTiles(cols, rows, tileW, tileH, scrollX, scrollY,
-        (x, y) => ctx.strokeRect(x + lx + .5, y + ty + .5, bw - 1, bh - 1));
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lw;
+      ctx.setLineDash(dash);
+      this._forTiles(cols, rows, tileW, tileH, scrollX, scrollY, (x, y) =>
+        ctx.strokeRect(x + lx + 0.5, y + ty + 0.5, bw - 1, bh - 1)
+      );
       ctx.restore();
     }
   }
@@ -267,11 +294,17 @@ export default class SpriteSheetTileGrid {
     const ax = (this.anchorPoint.x / this.naturalTileW) * tileW;
     const ay = (this.anchorPoint.y / this.naturalTileH) * tileH;
     const R = 5;
-    for (const [color, lw] of [["rgba(0,0,0,0.6)", 3.5], ["rgba(255,220,0,1)", 1.5]]) {
+    for (const [color, lw] of [
+      ["rgba(0,0,0,0.6)", 3.5],
+      ["rgba(255,220,0,1)", 1.5],
+    ]) {
       ctx.save();
-      ctx.strokeStyle = color; ctx.lineWidth = lw;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lw;
       this._forTiles(cols, rows, tileW, tileH, scrollX, scrollY, (x, y) => {
-        ctx.beginPath(); ctx.arc(x + ax, y + ay, R, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x + ax, y + ay, R, 0, Math.PI * 2);
+        ctx.stroke();
       });
       ctx.restore();
     }
@@ -311,8 +344,8 @@ export default class SpriteSheetTileGrid {
    */
   _clampedTileAt(clientX, clientY) {
     const rect = this._canvas.getBoundingClientRect();
-    const imgX = (clientX - rect.left) + this._container.scrollLeft;
-    const imgY = (clientY - rect.top)  + this._container.scrollTop;
+    const imgX = clientX - rect.left + this._container.scrollLeft;
+    const imgY = clientY - rect.top + this._container.scrollTop;
     const tileW = this._imgCssW / this._cols;
     const tileH = this._imgCssH / this._rows;
     return {
@@ -340,9 +373,9 @@ export default class SpriteSheetTileGrid {
     this._notifyChange();
     // Attach move/up to document so the drag continues outside the canvas.
     this._dragMove = (e) => this._onDocMouseMove(e);
-    this._dragUp   = (e) => this._onDocMouseUp(e);
+    this._dragUp = (e) => this._onDocMouseUp(e);
     document.addEventListener("mousemove", this._dragMove);
-    document.addEventListener("mouseup",   this._dragUp);
+    document.addEventListener("mouseup", this._dragUp);
   }
 
   _onDocMouseMove(e) {
@@ -359,9 +392,9 @@ export default class SpriteSheetTileGrid {
     if (e.button !== 0) return;
     this._drag = null;
     document.removeEventListener("mousemove", this._dragMove);
-    document.removeEventListener("mouseup",   this._dragUp);
+    document.removeEventListener("mouseup", this._dragUp);
     this._dragMove = null;
-    this._dragUp   = null;
+    this._dragUp = null;
   }
 
   /** Apply the drag rectangle from drag start to (currentCol, currentRow). */

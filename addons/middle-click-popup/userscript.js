@@ -1,7 +1,12 @@
 //@ts-check
 
 import WorkspaceQuerier, { QueryResult } from "./WorkspaceQuerier.js";
-import renderBlock, { BlockComponent, getBlockHeight, getBlockCenterOffset, getBlockBgOffset } from "./BlockRenderer.js";
+import renderBlock, {
+  BlockComponent,
+  getBlockHeight,
+  getBlockCenterOffset,
+  getBlockBgOffset,
+} from "./BlockRenderer.js";
 import { BlockInstance, BlockShape, BlockTypeInfo } from "./BlockTypeInfo.js";
 import { onClearTextWidthCache } from "./module.js";
 

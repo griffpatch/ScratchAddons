@@ -80,12 +80,7 @@ export default class SpriteSheetImporter {
 
     const tileW = Math.floor(img.naturalWidth / cols);
     const tileH = Math.floor(img.naturalHeight / rows);
-    const { x: rotCenterX, y: rotCenterY } = SpriteSheetImporter.anchorToCenter(
-      anchorIndex,
-      tileW,
-      tileH,
-      padding
-    );
+    const { x: rotCenterX, y: rotCenterY } = SpriteSheetImporter.anchorToCenter(anchorIndex, tileW, tileH, padding);
 
     this._tileCanvas.width = tileW;
     this._tileCanvas.height = tileH;
@@ -143,9 +138,7 @@ export default class SpriteSheetImporter {
       };
 
       // Check for existing costume with the same name.
-      const existingIndex = target.sprite.costumes_.findIndex(
-        (c) => c.name === costumeName
-      );
+      const existingIndex = target.sprite.costumes_.findIndex((c) => c.name === costumeName);
       if (existingIndex !== -1) {
         const existing = target.sprite.costumes_[existingIndex];
         // Skip if content is identical (same content MD5 = same assetId).
