@@ -1,0 +1,52 @@
+{
+  "name": "Scratch project inspector",
+  "description": "Converts the current Scratch project into clean pseudocode for review, sharing, or AI analysis.",
+  "credits": [
+    {
+      "name": "griffpatch"
+    }
+  ],
+  "dynamicEnable": true,
+  "dynamicDisable": true,
+  "permissions": [
+    "https://api.scratch.mit.edu/*",
+    "https://projects.scratch.mit.edu/*",
+    "https://models.inference.ai.azure.com/*"
+  ],
+  "settings": [
+    {
+      "name": "GitHub Models API token",
+      "id": "apiToken",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "name": "AI model",
+      "id": "apiModel",
+      "type": "select",
+      "default": "gpt-4.1",
+      "potentialValues": [
+        { "id": "gpt-4.1", "name": "GPT-4.1 (best for code, large context)" },
+        { "id": "gpt-4o", "name": "GPT-4o (fast, good)" },
+        { "id": "gpt-4o-mini", "name": "GPT-4o mini (faster, cheaper)" },
+        { "id": "o4-mini", "name": "o4-mini (reasoning model)" },
+        { "id": "claude-3-7-sonnet", "name": "Claude 3.7 Sonnet (great at code)" }
+      ]
+    }
+  ],
+  "userscripts": [
+    {
+      "url": "userscript.js",
+      "matches": ["projects"]
+    }
+  ],
+  "userstyles": [
+    {
+      "url": "userstyle.css",
+      "matches": ["projects"]
+    }
+  ],
+  "versionAdded": "1.42.0",
+  "tags": ["editor", "codeEditor"],
+  "enabledByDefault": false
+}

@@ -1,0 +1,1272 @@
+/* ── Toolbar button (icon only) ───────────────────────────────────────────── */
+.sa-inspector-btn {
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  padding: 0 0.5rem;
+  display: flex;
+  align-items: center;
+  opacity: 0.85;
+}
+
+.sa-inspector-btn:hover {
+  opacity: 1;
+}
+
+/* ── Panel ─────────────────────────────────────────────────────────────────── */
+.sa-inspector-panel {
+  position: fixed;
+  top: 3rem;
+  right: 1rem;
+  width: 680px;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 5rem);
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  z-index: 9999;
+  overflow: hidden;
+}
+
+/* Invisible drag strips on every edge/corner for custom resizing (see
+   makeResizeHandle in userscript.js) — replaces the native CSS `resize`
+   property, which only offers a bottom-right corner grip and can't resize
+   from the left/top edges at all. The main panel omits the right edge/corners
+   — that's where its content scrollbar lives, and a resize handle there makes
+   the scrollbar hard to grab. The side-by-side popup uses the full set (see
+   .sa-inspector-sbs-popup ::-webkit-scrollbar, which widens its scrollbar to
+   compensate). */
+.sa-inspector-resize-handle {
+  position: absolute;
+  z-index: 10;
+}
+
+.sa-inspector-resize-n,
+.sa-inspector-resize-s {
+  left: 8px;
+  right: 8px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.sa-inspector-resize-n {
+  top: 0;
+}
+.sa-inspector-resize-s {
+  bottom: 0;
+}
+
+.sa-inspector-resize-e,
+.sa-inspector-resize-w {
+  top: 8px;
+  bottom: 8px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.sa-inspector-resize-e {
+  right: 0;
+}
+.sa-inspector-resize-w {
+  left: 0;
+}
+
+.sa-inspector-resize-ne,
+.sa-inspector-resize-nw,
+.sa-inspector-resize-se,
+.sa-inspector-resize-sw {
+  width: 14px;
+  height: 14px;
+}
+.sa-inspector-resize-ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.sa-inspector-resize-sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+.sa-inspector-resize-nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.sa-inspector-resize-se {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+
+/* ── Side-by-side popup (floating, per-script wide diff view) ────────────── */
+.sa-inspector-sbs-popup {
+  position: fixed;
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  z-index: 10000;
+  overflow: hidden;
+}
+
+.sa-inspector-sbs-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  background: #313244;
+  border-bottom: 1px solid #45475a;
+  border-radius: 8px 8px 0 0;
+  flex-shrink: 0;
+  min-height: 32px;
+  cursor: grab;
+  user-select: none;
+}
+
+.sa-inspector-sbs-header:active {
+  cursor: grabbing;
+}
+
+.sa-inspector-sbs-title {
+  flex: 1;
+  color: #cdd6f4;
+  font-family: monospace;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sa-inspector-sbs-body-wrap {
+  flex: 1;
+  overflow: auto;
+}
+
+.sa-inspector-sbs-body-wrap .sa-inspector-diff-body {
+  border-top: none;
+}
+
+/* ── Toolbar (tab strip + action buttons) ─────────────────────────────────── */
+.sa-inspector-toolbar {
+  display: flex;
+  align-items: stretch;
+  background: #313244;
+  border-bottom: 1px solid #45475a;
+  border-radius: 8px 8px 0 0;
+  flex-shrink: 0;
+  min-height: 32px;
+  cursor: grab;
+  user-select: none;
+}
+
+.sa-inspector-toolbar:active {
+  cursor: grabbing;
+}
+
+.sa-inspector-tabs {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.sa-inspector-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.sa-inspector-tab {
+  background: transparent;
+  border: none;
+  border-right: 1px solid #45475a;
+  color: #6c7086;
+  cursor: pointer;
+  font-family: sans-serif;
+  font-size: 0.72rem;
+  padding: 0 0.75rem;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.sa-inspector-tab:hover {
+  background: #3d3f53;
+  color: #cdd6f4;
+}
+
+.sa-inspector-tab-active {
+  background: #1e1e2e;
+  color: #cdd6f4;
+}
+
+/* Active tab accent underline — colour per tab type set via JS class on panel */
+.sa-inspector-panel[data-tab-type="current"] .sa-inspector-tab-active,
+.sa-inspector-panel[data-tab-type="compare"] .sa-inspector-tab-active,
+.sa-inspector-panel[data-tab-type="issues"] .sa-inspector-tab-active {
+  border-bottom: 2px solid currentColor;
+}
+
+.sa-inspector-tab-close {
+  opacity: 0.45;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.sa-inspector-tab-close:hover {
+  opacity: 1;
+}
+
+.sa-inspector-toolbar-actions {
+  display: flex;
+  align-items: center;
+  padding: 0 0.3rem;
+  gap: 0.1rem;
+  flex-shrink: 0;
+  border-left: 1px solid #45475a;
+}
+
+.sa-inspector-action-btn,
+.sa-inspector-close-btn {
+  background: none;
+  border: none;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.sa-inspector-action-btn:hover,
+.sa-inspector-close-btn:hover {
+  background: #45475a;
+}
+
+/* ── Body ──────────────────────────────────────────────────────────────────── */
+.sa-inspector-current-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.sa-inspector-body {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+}
+
+.sa-inspector-content {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  color: #cdd6f4;
+  font-size: 0.75rem;
+  font-family: monospace;
+  line-height: 1.5;
+  white-space: pre;
+  background: #181825;
+}
+
+/* Per-tab-type body tints */
+.sa-inspector-matches {
+  background: #1a1b2e;
+}
+
+.sa-inspector-issues {
+  background: #1b1a2a;
+  border-left: 2px solid #cba6f7;
+  /* override white-space: pre from .sa-inspector-content so text wraps */
+  white-space: normal;
+}
+
+/* ── Overlay copy button (bottom-right of code area) ──────────────────────── */
+.sa-inspector-overlay-copy {
+  position: absolute;
+  bottom: 0.6rem;
+  right: 0.6rem;
+  background: rgba(49, 50, 68, 0.85);
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.45rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sa-inspector-body:hover .sa-inspector-overlay-copy {
+  opacity: 1;
+}
+
+.sa-inspector-overlay-copy:hover {
+  background: #45475a;
+}
+
+/* ── Overlay inject button (bottom-right, to the left of copy button) ──────── */
+.sa-inspector-overlay-inject {
+  position: absolute;
+  bottom: 0.6rem;
+  right: 3rem;
+  background: rgba(49, 50, 68, 0.85);
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.45rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sa-inspector-body:hover .sa-inspector-overlay-inject {
+  opacity: 1;
+}
+
+.sa-inspector-overlay-inject:hover {
+  background: #45475a;
+}
+
+.sa-inspector-overlay-inject:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* ── Issues tab ───────────────────────────────────────── */
+
+/* ── Markdown rendering inside issues tab ─────────────── */
+.sa-inspector-issues .sa-inspector-md-h {
+  color: #89b4fa;
+  font-family: sans-serif;
+  font-weight: 700;
+  margin: 0.7rem 0 0.25rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid #313244;
+  line-height: 1.3;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.sa-inspector-issues h2.sa-inspector-md-h {
+  font-size: 0.95rem;
+}
+.sa-inspector-issues h3.sa-inspector-md-h {
+  font-size: 0.85rem;
+}
+.sa-inspector-issues h4.sa-inspector-md-h {
+  font-size: 0.8rem;
+  color: #cdd6f4;
+  border-bottom: none;
+}
+.sa-inspector-issues h5.sa-inspector-md-h {
+  font-size: 0.78rem;
+  color: #6c7086;
+  border-bottom: none;
+}
+
+.sa-inspector-issues .sa-inspector-md-p {
+  color: #cdd6f4;
+  font-family: sans-serif;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  margin: 0.25rem 0;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.sa-inspector-issues .sa-inspector-md-list {
+  color: #cdd6f4;
+  font-family: sans-serif;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  margin: 0.2rem 0 0.2rem 1.2rem;
+  padding: 0;
+}
+
+.sa-inspector-issues .sa-inspector-md-list li {
+  margin-bottom: 0.15rem;
+}
+
+.sa-inspector-issues .sa-inspector-md-pre {
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.4rem 0;
+  overflow-x: auto;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+/* Wrapper so the Parse button sits below the code block */
+.sa-inspector-md-pre-wrap {
+  position: relative;
+  margin: 0.4rem 0;
+}
+
+.sa-inspector-md-pre-wrap .sa-inspector-md-pre {
+  margin: 0;
+}
+
+.sa-inspector-code-parse-btn {
+  display: none;
+  margin-top: 0.2rem;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+}
+
+.sa-inspector-md-pre-wrap:hover .sa-inspector-code-parse-btn {
+  display: inline-block;
+}
+
+.sa-inspector-code-parse-btn:hover {
+  background: #45475a;
+}
+
+.sa-inspector-issues .sa-inspector-md-pre code {
+  color: #a6e3a1;
+  font-family: monospace;
+}
+
+.sa-inspector-md-code {
+  background: #313244;
+  color: #fab387;
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+  font-size: 0.85em;
+  font-family: monospace;
+}
+
+.sa-inspector-issue-section {
+  margin: 0.4rem 0 0.2rem;
+  color: #89b4fa;
+  font-size: 0.78rem;
+  font-weight: bold;
+  border-bottom: 1px solid #313244;
+  padding-bottom: 0.2rem;
+}
+
+.sa-inspector-issue-card {
+  background: #27273a;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.sa-inspector-card-active {
+  border-color: #89b4fa;
+  box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.35);
+}
+
+.sa-inspector-issue-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  background: #313244;
+}
+
+.sa-inspector-issue-card-title {
+  flex: 1;
+  color: #cdd6f4;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
+.sa-inspector-issue-go-btn {
+  background: #45475a;
+  border: none;
+  border-radius: 4px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.5rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sa-inspector-issue-go-btn:hover {
+  background: #585b70;
+}
+
+.sa-inspector-issue-evidence {
+  margin: 0;
+  padding: 0.4rem 0.75rem;
+  color: #a6e3a1;
+  font-family: monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  background: #1e1e2e;
+}
+
+.sa-inspector-ast-warnings {
+  background: #2a1f3a;
+  border: 1px solid #f38ba8;
+  border-radius: 5px;
+  color: #f38ba8;
+  font-family: sans-serif;
+  font-size: 0.72rem;
+  padding: 0.35rem 0.7rem;
+  margin-bottom: 0.6rem;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.sa-inspector-ast-script-card {
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+}
+
+.sa-inspector-ast-script-header {
+  background: #27273a;
+  color: #89b4fa;
+  font-family: sans-serif;
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid #45475a;
+}
+
+.sa-inspector-ast-subtabs {
+  display: flex;
+  border-bottom: 1px solid #45475a;
+  background: #181825;
+}
+
+.sa-inspector-ast-subtab {
+  background: transparent;
+  border: none;
+  border-right: 1px solid #45475a;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0.25rem 0.7rem;
+  white-space: nowrap;
+}
+
+.sa-inspector-ast-subtab:hover {
+  background: #313244;
+  color: #cdd6f4;
+}
+
+.sa-inspector-ast-subtab-active {
+  background: #1e1e2e;
+  color: #cba6f7;
+  border-bottom: 2px solid #cba6f7;
+}
+
+.sa-inspector-ast-pane {
+  padding: 0.5rem 0.75rem;
+}
+
+.sa-inspector-ast-pre {
+  margin: 0;
+  background: #11111b;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  color: #a6e3a1;
+  font-family: monospace;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.sa-inspector-ast-inject-info {
+  color: #cdd6f4;
+  font-family: sans-serif;
+  font-size: 0.78rem;
+  margin: 0 0 0.5rem;
+}
+
+.sa-inspector-ast-inject-log {
+  margin-top: 0.5rem;
+  color: #cdd6f4;
+  min-height: 1.5rem;
+}
+
+.sa-inspector-compare-divider {
+  height: 1px;
+  background: #45475a;
+  margin: 0.25rem 0;
+  flex-shrink: 0;
+}
+
+.sa-inspector-compare-load-section {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  flex-shrink: 0;
+}
+
+.sa-inspector-compare-load-btn {
+  flex: 1;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.sa-inspector-compare-ref-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  background: #1e1e2e;
+  border-bottom: 1px solid #313244;
+  flex-shrink: 0;
+}
+
+.sa-inspector-bug-input {
+  flex: 1;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #cdd6f4;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.5rem;
+  outline: none;
+  min-width: 0;
+}
+
+.sa-inspector-bug-input:focus {
+  border-color: #89b4fa;
+}
+
+.sa-inspector-compare-ref-label {
+  flex: 1;
+  color: #89b4fa;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sa-inspector-compare-ref-pre {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  color: #cdd6f4;
+  font-size: 0.78rem;
+  font-family: monospace;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.sa-inspector-usage-summary {
+  font-family: sans-serif;
+  font-size: 0.7rem;
+  color: #6c7086;
+  padding: 0.3rem 0.75rem;
+  background: #1b1a2a;
+  border-top: 1px solid #313244;
+  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+}
+
+.sa-inspector-paste-area {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  padding: 0.5rem;
+  font-size: 0.78rem;
+  font-family: monospace;
+  resize: vertical;
+  min-height: 10rem;
+  flex-shrink: 0;
+}
+
+.sa-inspector-parse-btn {
+  margin-top: 0.4rem;
+  align-self: flex-start;
+}
+
+/* ── Themed scrollbars ────────────────────────────────────── */
+.sa-inspector-panel ::-webkit-scrollbar,
+.sa-inspector-sbs-popup ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.sa-inspector-panel ::-webkit-scrollbar-track,
+.sa-inspector-sbs-popup ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sa-inspector-panel ::-webkit-scrollbar-thumb,
+.sa-inspector-sbs-popup ::-webkit-scrollbar-thumb {
+  background: #45475a;
+  border-radius: 3px;
+}
+
+.sa-inspector-panel ::-webkit-scrollbar-thumb:hover,
+.sa-inspector-sbs-popup ::-webkit-scrollbar-thumb:hover {
+  background: #6c7086;
+}
+
+.sa-inspector-panel ::-webkit-scrollbar-corner,
+.sa-inspector-sbs-popup ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox */
+.sa-inspector-panel *,
+.sa-inspector-sbs-popup * {
+  scrollbar-width: thin;
+  scrollbar-color: #45475a transparent;
+}
+
+/* The side-by-side popup resizes from every edge, including the right — where
+   its own content scrollbar lives — so its scrollbar is widened to leave
+   enough exposed track to grab despite the resize handle sharing that edge
+   (see .sa-inspector-resize-e in userscript.js/userstyle.css). */
+.sa-inspector-sbs-popup ::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.sa-inspector-sbs-popup * {
+  scrollbar-width: auto;
+}
+
+/* ── Streaming markdown container ────────────────────────── */
+.sa-inspector-stream-md {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 1rem;
+  white-space: normal;
+}
+
+.sa-inspector-stream-tail {
+  border-left: 2px solid #45475a;
+  color: #6c7086;
+  font-style: italic;
+}
+
+/* ── Streaming state ─────────────────────────────────────── */
+@keyframes sa-inspector-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.sa-inspector-stream-waiting {
+  animation: sa-inspector-pulse 1.2s ease-in-out infinite;
+}
+
+.sa-inspector-stream-pre {
+  flex: 1;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sa-inspector-matches {
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow-y: auto;
+  font-family: sans-serif;
+}
+
+.sa-inspector-matches-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: #1e1e2e;
+  border-bottom: 1px solid #313244;
+  flex-shrink: 0;
+}
+
+.sa-inspector-matches-sort-label {
+  color: #cdd6f4;
+  font-size: 0.78rem;
+}
+
+.sa-inspector-matches-sort {
+  background: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.sa-inspector-matches-import-btn {
+  margin-left: auto;
+  font-size: 0.78rem;
+  padding: 0.15rem 0.55rem;
+}
+
+.sa-inspector-matches-empty {
+  margin: 1.5rem 1rem;
+  color: #6c7086;
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.sa-inspector-match-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid #313244;
+}
+
+.sa-inspector-match-row:last-child {
+  border-bottom: none;
+}
+
+.sa-inspector-match-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.sa-inspector-match-title {
+  color: #cdd6f4;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sa-inspector-match-subtitle {
+  color: #6c7086;
+  font-size: 0.72rem;
+  margin-top: 0.1rem;
+}
+
+.sa-inspector-match-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+/* Track */
+.sa-inspector-match-bar-track {
+  width: 120px;
+  height: 5px;
+  border-radius: 3px;
+  background: #313244;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+/* Fill — width set inline as px */
+.sa-inspector-match-bar {
+  height: 100%;
+  border-radius: 3px;
+  min-width: 2px;
+}
+
+.sa-inspector-match-pct {
+  color: #6c7086;
+  font-size: 0.7rem;
+}
+
+.sa-inspector-match-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.sa-inspector-match-del {
+  background: #2a1f2e !important;
+  color: #f38ba8 !important;
+  border-color: #45475a !important;
+}
+
+.sa-inspector-match-del:hover {
+  background: #3b1f2e !important;
+}
+
+/* ── Quick Diff rendering ───────────────────────────────────────────────────── */
+
+.sa-inspector-diff-sprite-table {
+  padding: 0.4rem 0.75rem;
+}
+
+.sa-inspector-diff-sprite-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: #cdd6f4;
+  padding: 0.1rem 0;
+}
+
+.sa-inspector-diff-sprite-row.sa-diff-missing .sa-diff-arrow {
+  color: #f38ba8;
+}
+
+.sa-inspector-diff-sprite-row.sa-diff-extra .sa-diff-arrow {
+  color: #a6e3a1;
+}
+
+.sa-diff-name {
+  color: #cdd6f4;
+}
+
+.sa-diff-arrow {
+  color: #6c7086;
+  white-space: nowrap;
+}
+
+.sa-diff-conf-good {
+  color: #a6e3a1;
+}
+.sa-diff-conf-ok {
+  color: #f9e2af;
+}
+.sa-diff-conf-bad {
+  color: #f38ba8;
+}
+
+/* Rename rows */
+.sa-inspector-diff-rename-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+.sa-diff-type-tag {
+  background: #313244;
+  border-radius: 3px;
+  color: #cba6f7;
+  font-family: monospace;
+  font-size: 0.68rem;
+  padding: 0.05em 0.4em;
+}
+
+.sa-diff-sprite-hint {
+  color: #6c7086;
+  font-size: 0.7rem;
+}
+
+/* Collapsed-by-default group for high-confidence matches/renames (see
+   makeCollapsibleRows in userscript.js) */
+.sa-inspector-collapsible-toggle {
+  background: none;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  display: block;
+  font-family: monospace;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.75rem;
+  text-align: left;
+  width: 100%;
+}
+
+.sa-inspector-collapsible-toggle:hover {
+  color: #cdd6f4;
+}
+
+/* Sprite-label headers inside script diff — matches .sa-inspector-issue-section
+   (the "📜 Script Differences" heading etc.) exactly, so the same visual
+   language for "section boundary" carries all the way down the page instead
+   of introducing a second, heavier-handed style one level deeper. */
+.sa-inspector-diff-sprite-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.9rem 0.5rem 0.3rem;
+  padding: 0.3rem 0 0.35rem;
+  border-bottom: 1px solid #313244;
+  color: #89b4fa;
+  font-size: 0.78rem;
+  font-weight: bold;
+}
+
+.sa-inspector-diff-sprite-label:first-child {
+  margin-top: 0.3rem;
+}
+
+/* Summary note for sprites hidden because none of their scripts differed */
+.sa-inspector-diff-clean-sprites-note {
+  color: #6c7086;
+  font-family: monospace;
+  font-size: 0.72rem;
+  padding: 0.4rem 0.75rem;
+}
+
+/* Summary note for individual scripts hidden within a sprite that otherwise
+   has differences elsewhere (see cleanScriptCount in userscript.js) */
+.sa-inspector-diff-clean-scripts-note {
+  color: #6c7086;
+  font-family: monospace;
+  font-size: 0.7rem;
+  padding: 0.2rem 0.75rem 0.3rem;
+}
+
+/* Script comparison cards */
+.sa-inspector-diff-script-card {
+  background: #27273a;
+  border: 1px solid #45475a;
+  border-radius: 5px;
+  margin: 0.6rem 0.5rem;
+  overflow: hidden;
+}
+
+.sa-inspector-diff-script-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  background: #313244;
+}
+
+.sa-inspector-diff-script-header.sa-diff-clean {
+  background: #1e2630;
+  border-left: 3px solid #a6e3a1;
+}
+
+.sa-diff-missing-script .sa-inspector-diff-script-header {
+  background: #2a1f2e;
+  border-left: 3px solid #f38ba8;
+}
+
+.sa-diff-extra-script .sa-inspector-diff-script-header {
+  background: #1a2a1e;
+  border-left: 3px solid #a6e3a1;
+}
+
+.sa-diff-script-hat {
+  flex: 1;
+  color: #cdd6f4;
+  font-family: monospace;
+  font-size: 0.73rem;
+}
+
+/* Small status badges */
+.sa-diff-badge {
+  border-radius: 3px;
+  font-size: 0.68rem;
+  padding: 0.05em 0.45em;
+  white-space: nowrap;
+}
+
+.sa-diff-changed {
+  background: #3a2e1a;
+  color: #f9e2af;
+}
+.sa-diff-inserted {
+  background: #1a2a1e;
+  color: #a6e3a1;
+}
+.sa-diff-deleted {
+  background: #2a1a1e;
+  color: #f38ba8;
+}
+.sa-diff-moved {
+  background: #234876;
+  color: #cdd6f4;
+}
+.sa-diff-swapped {
+  background: #3a2e52;
+  color: #cba6f7;
+}
+
+/* Diff body — coloured line-by-line pseudocode */
+.sa-inspector-diff-body {
+  border-top: 1px solid #313244;
+  font-family: monospace;
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.sa-diff-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.1rem 0.6rem;
+}
+
+.sa-diff-line-insert {
+  background: #162016;
+  color: #a6e3a1;
+}
+.sa-diff-line-delete {
+  background: #201216;
+  color: #f38ba8;
+}
+.sa-diff-line-moved {
+  color: #cdd6f4;
+}
+.sa-diff-line-swapped {
+  color: #cdd6f4;
+}
+/* A "change" line whose rendered pseudocode text is identical on both sides —
+   e.g. a procedure's own parameter swapped for a same-named variable — shown
+   via makeSemanticChangeLine/its split-view equivalent instead of a normal
+   red/green word-diff (there are no differing words to highlight). */
+.sa-diff-line-change {
+  color: #f9e2af;
+}
+.sa-diff-semantic-detail {
+  color: #6c7086;
+  font-size: 0.65rem;
+  margin-left: 0.3rem;
+}
+.sa-diff-line-more {
+  background: #1e1e2e;
+  color: #6c7086;
+  padding: 0.15rem 0.6rem;
+}
+.sa-diff-line-match {
+  color: #7f849c;
+}
+
+/* Side-by-side (split) view: two columns, ref | student, with matching ops
+   rendered as aligned row-pairs so context lines keep both sides in step. A
+   row normally contributes two grid children (left/right cell); moved-statement
+   and "more" overflow lines instead use a single cell spanning both columns. */
+.sa-diff-body-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.sa-diff-body-split .sa-diff-col-header {
+  background: #313244;
+  color: #89b4fa;
+  font-size: 0.65rem;
+  font-weight: bold;
+  letter-spacing: 0.03em;
+  padding: 0.15rem 0.6rem;
+  text-transform: uppercase;
+}
+
+.sa-diff-body-split .sa-diff-col-left {
+  border-right: 1px solid #313244;
+}
+
+.sa-diff-body-split .sa-diff-line-full {
+  grid-column: 1 / -1;
+}
+
+.sa-diff-line-empty {
+  background: repeating-linear-gradient(45deg, #232334, #232334 6px, #1e1e2e 6px, #1e1e2e 12px);
+}
+
+/* The "other side" of a moved statement's row (see .sa-diff-moved) — a softer,
+   blue-tinted stripe distinguishes it from a genuine insert/delete gap. */
+.sa-diff-line-moved-empty {
+  background: repeating-linear-gradient(45deg, #1c2c42, #1c2c42 6px, #1e1e2e 6px, #1e1e2e 12px);
+}
+
+/* When a delete/insert line only highlights specific changed token(s) (both the
+   before and after lines are shown together), keep the surrounding unchanged text
+   neutral and let the highlighted token itself carry the red/green colour instead of
+   colouring the whole line. */
+.sa-diff-line-partial {
+  color: #cdd6f4;
+}
+
+/* A little breathing room before each changed-pair (and swapped/moved row) so
+   consecutive differences in a long script read as distinct groups instead of
+   one continuous wall of red/green lines. Applied via an explicit shared class
+   (added by the renderer to every cell that starts a new row) rather than to
+   e.g. just the delete/left side — in the split (grid) view a row's two cells
+   share one track height, so giving the margin to only one side inflates the
+   whole row and stretches the other cell to fill the gap, showing up as
+   mismatched empty space under the *other* column's text.  */
+.sa-diff-row-start {
+  margin-top: 0.35rem;
+}
+
+.sa-diff-line-text {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Highlighted changed token within before/after "change" diff lines (see
+   wordDiff/buildDiffLineFragment in userscript.js). Colour matches the enclosing
+   delete/insert line so removed tokens read red, added tokens read green. */
+.sa-diff-token-changed {
+  border-radius: 2px;
+  padding: 0 0.15em;
+  font-weight: bold;
+}
+.sa-diff-line-delete .sa-diff-token-changed {
+  background: rgba(243, 139, 168, 0.3);
+  color: #f38ba8;
+}
+.sa-diff-line-insert .sa-diff-token-changed {
+  background: rgba(166, 227, 161, 0.3);
+  color: #a6e3a1;
+}
+
+.sa-diff-line-go {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.75rem;
+  opacity: 0.45;
+  padding: 0;
+  line-height: 1;
+}
+
+.sa-diff-line:hover .sa-diff-line-go {
+  opacity: 1;
+}
+
+.sa-inspector-note-bar {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0.4rem 0.85rem;
+  background: #2a2a3d;
+  border-top: 1px solid #45475a;
+  color: #f9e2af;
+  font-family: monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  max-height: 6rem;
+  overflow-y: auto;
+}
