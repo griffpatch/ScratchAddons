@@ -320,6 +320,7 @@ export default async function ({ addon }) {
       hiy: s.handleIn.y,
       hox: s.handleOut.x,
       hoy: s.handleOut.y,
+      selected: s.selected,
     }));
 
   // Restore a path to a previously snapshotted state by rewriting its segments
@@ -332,6 +333,7 @@ export default async function ({ addon }) {
       path.segments[i].point = new paper.Point(s.x, s.y);
       path.segments[i].handleIn = new paper.Point(s.hix, s.hiy);
       path.segments[i].handleOut = new paper.Point(s.hox, s.hoy);
+      path.segments[i].selected = !!s.selected;
     }
   };
 
@@ -357,9 +359,13 @@ export default async function ({ addon }) {
     if (corner.isArc) {
       if (r < 0.1) {
         // Collapse the arc back to a sharp corner.
+        const aSeg = pathItem.segments[corner.segIndex];
+        const bSeg = pathItem.segments[corner.segIndex + 1];
+        const mergedWasSelected = !!aSeg?.selected || !!bSeg?.selected;
         pathItem.segments[corner.segIndex].point = corner.origCorner.clone();
         pathItem.segments[corner.segIndex].handleIn = new paper.Point(0, 0);
         pathItem.segments[corner.segIndex].handleOut = new paper.Point(0, 0);
+        pathItem.segments[corner.segIndex].selected = mergedWasSelected;
         pathItem.removeSegment(corner.segIndex + 1);
       } else {
         // Replace the existing A/B segments with a new arc at updated radius.
@@ -381,6 +387,7 @@ export default async function ({ addon }) {
       }
     } else {
       if (r < 0.1) return; // already sharp — nothing to modify
+      const originalWasSelected = pathItem.segments[corner.segIndex].selected;
       const d = r / corner.tanHalfAngle;
       const P1 = corner.origCorner.add(corner.vPrev.multiply(d));
       const P2 = corner.origCorner.add(corner.vNext.multiply(d));
@@ -392,10 +399,12 @@ export default async function ({ addon }) {
         // handleIn points back toward the corner tip → convex arc
         new paper.Segment(P2, corner.vNext.multiply(-h), new paper.Point(0, 0)),
       ]);
+      pathItem.segments[corner.segIndex + 1].selected = originalWasSelected;
       pathItem.segments[corner.segIndex].point = P1;
       pathItem.segments[corner.segIndex].handleIn = new paper.Point(0, 0);
       // handleOut points back toward the corner tip → convex arc
       pathItem.segments[corner.segIndex].handleOut = corner.vPrev.multiply(-h);
+      pathItem.segments[corner.segIndex].selected = originalWasSelected;
     }
   };
 
