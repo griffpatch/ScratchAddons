@@ -9,13 +9,6 @@
 export const COLUMN_GROUP_TOLERANCE = 128;
 
 /**
- * Maximum X distance between two top blocks for them to be considered part of the same column.
- * doCleanUp in editor-cleanup-plus imports this to guarantee columns are always placed far
- * enough apart that a second cleanup run won't re-merge them.
- */
-export const COLUMN_GROUP_TOLERANCE = 128;
-
-/**
  * Find all the uses of a named variable.
  * @param {string} id ID of the variable to find.
  * @return {!Array.<!Blockly.Block>} Array of block usages.
