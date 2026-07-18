@@ -439,10 +439,21 @@ export class BlockTypeInfo {
     };
 
     const addFieldInputs = (field, inputIdx, fieldIdx) => {
-      if (field instanceof Blockly.FieldDropdown) {
-        const options = field.getOptions();
-        addInput(new BlockInputEnum(options, inputIdx, fieldIdx, fieldIdx === -1));
-      } else if (field instanceof Blockly.FieldImage) {
+      let FieldColourSlider;
+      let FieldNumber;
+      let FieldVerticalSeparator;
+      if (Blockly.registry) {
+        // new Blockly
+        FieldColourSlider = Blockly.registry.getClass(Blockly.registry.Type.FIELD, "field_colour_slider");
+        FieldNumber = Blockly.registry.getClass(Blockly.registry.Type.FIELD, "field_number");
+        FieldVerticalSeparator = Blockly.registry.getClass(Blockly.registry.Type.FIELD, "field_vertical_separator");
+      } else {
+        FieldColourSlider = Blockly.FieldColourSlider;
+        FieldNumber = Blockly.FieldNumber;
+        FieldVerticalSeparator = Blockly.FieldVerticalSeparator;
+      }
+
+      if (field instanceof Blockly.FieldImage) {
         switch (field.getValue().split("/").pop()) {
           case "green-flag.svg":
             parts.push(locale("/_general/blocks/green-flag"));
@@ -454,34 +465,22 @@ export class BlockTypeInfo {
             parts.push(locale("/_general/blocks/anticlockwise"));
             break;
         }
+      } else if (
+        field instanceof Blockly.FieldLabel ||
+        field instanceof FieldVerticalSeparator ||
+        (!Blockly.registry && field instanceof Blockly.FieldVariableGetter)
+      ) {
+        if (field.getText().trim().length !== 0) parts.push(field.getText());
+      } else if (field instanceof FieldColourSlider) {
+        const defaultValue = field.getValue?.() ?? field.getText?.() ?? "#ff6680";
+        addInput(new BlockInputColour(inputIdx, fieldIdx, defaultValue));
+      } else if (field instanceof FieldNumber) {
+        addInput(new BlockInputNumber(inputIdx, fieldIdx, field.getText()));
+      } else if (field instanceof Blockly.FieldDropdown) {
+        const options = field.getOptions();
+        addInput(new BlockInputEnum(options, inputIdx, fieldIdx, fieldIdx === -1));
       } else {
-        let FieldColourSlider;
-        let FieldNumber;
-        let FieldVerticalSeparator;
-        if (Blockly.registry) {
-          // new Blockly
-          FieldColourSlider = Blockly.registry.getClass(Blockly.registry.Type.FIELD, "field_colour_slider");
-          FieldNumber = Blockly.registry.getClass(Blockly.registry.Type.FIELD, "field_number");
-          FieldVerticalSeparator = Blockly.registry.getClass(Blockly.registry.Type.FIELD, "field_vertical_separator");
-        } else {
-          FieldColourSlider = Blockly.FieldColourSlider;
-          FieldNumber = Blockly.FieldNumber;
-          FieldVerticalSeparator = Blockly.FieldVerticalSeparator;
-        }
-        if (
-          field instanceof Blockly.FieldLabel ||
-          field instanceof FieldVerticalSeparator ||
-          (!Blockly.registry && field instanceof Blockly.FieldVariableGetter)
-        ) {
-          if (field.getText().trim().length !== 0) parts.push(field.getText());
-        } else if (field instanceof FieldColourSlider) {
-          const defaultValue = field.getValue?.() ?? field.getText?.() ?? "#ff6680";
-          addInput(new BlockInputColour(inputIdx, fieldIdx, defaultValue));
-        } else if (field instanceof FieldNumber) {
-          addInput(new BlockInputNumber(inputIdx, fieldIdx, field.getText()));
-        } else {
-          addInput(new BlockInputString(inputIdx, fieldIdx, field.getText()));
-        }
+        addInput(new BlockInputString(inputIdx, fieldIdx, field.getText()));
       }
     };
 
