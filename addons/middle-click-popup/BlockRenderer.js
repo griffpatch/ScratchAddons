@@ -4,7 +4,14 @@
  * @author Tacodiva
  */
 
-import { BlockShape, BlockInstance, BlockInputEnum, BlockInputBoolean, BlockInputBlock } from "./BlockTypeInfo.js";
+import {
+  BlockShape,
+  BlockInstance,
+  BlockInputEnum,
+  BlockInputBoolean,
+  BlockInputBlock,
+  BlockInputColour,
+} from "./BlockTypeInfo.js";
 import { getTextWidth } from "./module.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -323,6 +330,22 @@ function _renderBlock(block, container, parentCategory, isVertical) {
             "--sa-block-text"
           );
         }
+      } else if (blockPart instanceof BlockInputColour) {
+        const colorValue =
+          typeof blockInput === "string" && /^#[0-9a-fA-F]{6}$/.test(blockInput)
+            ? blockInput
+            : (blockPart.defaultValue ?? "#ff6680");
+        component = createBackedTextedComponent(
+          "",
+          blockContainer,
+          BlockShapes.TextInput,
+          categoryClass,
+          "--sa-mcp-color-input-fill",
+          `--sa-block-background-tertiary, ${category.colorTertiary}`,
+          "--sa-block-text"
+        );
+        component.dom.style.setProperty("--sa-mcp-color-input-fill", colorValue);
+        component.dom.classList.add("blocklyNonEditableText");
       } else if (blockPart instanceof BlockInputBoolean) {
         component = createBackedTextedComponent(
           "",

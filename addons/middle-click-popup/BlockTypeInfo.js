@@ -161,8 +161,9 @@ export class BlockInputBoolean extends BlockInput {
 }
 
 export class BlockInputColour extends BlockInput {
-  constructor(inputIdx, fieldIdx) {
+  constructor(inputIdx, fieldIdx, defaultValue) {
     super(BlockInputType.COLOUR, inputIdx, fieldIdx);
+    this.defaultValue = defaultValue;
   }
 
   setValue(block, value) {
@@ -199,6 +200,38 @@ export class BlockInputEnum extends BlockInput {
   ];
 
   /**
+   * Converts a Blockly dropdown option label into searchable/renderable text.
+   * @param {*} optionLabel
+   * @param {string} optionValue
+   * @returns {string}
+   */
+  static getOptionText(optionLabel, optionValue) {
+    if (typeof optionLabel === "string") {
+      return optionLabel;
+    }
+
+    if (typeof optionLabel === "number") {
+      return String(optionLabel);
+    }
+
+    if (optionLabel && typeof optionLabel === "object") {
+      const candidateStrings = [
+        optionLabel.textContent,
+        optionLabel.innerText,
+        optionLabel.title,
+        optionLabel.getAttribute?.("aria-label"),
+      ];
+      for (const candidate of candidateStrings) {
+        if (typeof candidate === "string" && candidate.trim().length > 0) {
+          return candidate;
+        }
+      }
+    }
+
+    return optionValue;
+  }
+
+  /**
    * @param {Array} options
    * @param {number} inputIdx
    * @param {number} fieldIdx
@@ -209,9 +242,10 @@ export class BlockInputEnum extends BlockInput {
     this.values = [];
     for (let i = 0; i < options.length; i++) {
       if (typeof options[i][1] === "string" && BlockInputEnum.INVALID_VALUES.indexOf(options[i][1]) === -1) {
+        const optionText = BlockInputEnum.getOptionText(options[i][0], options[i][1]);
         this.values.push({
           value: options[i][1],
-          string: String(options[i][0]).replaceAll(String.fromCharCode(160), " "),
+          string: optionText.replaceAll(String.fromCharCode(160), " "),
         });
       }
     }
@@ -441,7 +475,8 @@ export class BlockTypeInfo {
         ) {
           if (field.getText().trim().length !== 0) parts.push(field.getText());
         } else if (field instanceof FieldColourSlider) {
-          addInput(new BlockInputColour(inputIdx, fieldIdx));
+          const defaultValue = field.getValue?.() ?? field.getText?.() ?? "#ff6680";
+          addInput(new BlockInputColour(inputIdx, fieldIdx, defaultValue));
         } else if (field instanceof FieldNumber) {
           addInput(new BlockInputNumber(inputIdx, fieldIdx, field.getText()));
         } else {
