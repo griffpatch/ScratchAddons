@@ -81,21 +81,30 @@ export default async function ({ addon, console, msg, safeMsg: m }) {
       // If a top block's left edge is within 30px left / 50px right of root's left edge,
       // snap root to it so columns stay crisp.
       const rootLeft = isRTL ? tXMax : tPos.x;
-      let snapTarget = null;
-      let snapDist = Infinity;
+      let snapTargetAny = null;
+      let snapDistAny = Infinity;
+      let snapTargetAbove = null;
+      let snapDistAbove = Infinity;
       for (const b of wksp.getTopBlocks()) {
         if (b === root) continue;
         const { pos: bPos, xMax: bXMax } = getBlockPosAndXMax(b);
         const bLeft = isRTL ? bXMax : bPos.x;
         const leftOffset = bLeft - rootLeft;
-        if (leftOffset !== 0 && leftOffset >= -30 && leftOffset <= 50) {
+        if (leftOffset >= -30 && leftOffset <= 50) {
           const yDist = Math.abs(bPos.y - tPos.y);
-          if (yDist < snapDist) {
-            snapDist = yDist;
-            snapTarget = bLeft;
+          if (yDist < snapDistAny) {
+            snapDistAny = yDist;
+            snapTargetAny = bLeft;
+          }
+
+          // Prefer aligning to a stack above when both above and below candidates match.
+          if (bPos.y < tPos.y && yDist < snapDistAbove) {
+            snapDistAbove = yDist;
+            snapTargetAbove = bLeft;
           }
         }
       }
+      const snapTarget = snapTargetAbove ?? snapTargetAny;
       if (snapTarget !== null) {
         root.moveBy(snapTarget - rootLeft, 0);
         ({ pos: tPos, xMax: tXMax } = getBlockPosAndXMax(root));
