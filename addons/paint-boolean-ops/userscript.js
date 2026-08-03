@@ -54,7 +54,20 @@ export default async function ({ addon, msg }) {
   const intersectBtn = makeItem("intersect.svg", msg("intersect"), msg("intersect-alt"), "intersect");
   const compoundBtn = makeItem("combine.svg", msg("combine"), msg("combine-desc"), "combine");
   const expandBtn = makeItem("expand.svg", msg("expand"), msg("expand-desc"), "expand");
-  shapingSection.append(uniteBtn, subtractBtn, intersectBtn, compoundBtn, expandBtn);
+
+  // Each group gets native input-group classes (flex layout, inter-group spacing) once
+  // known. A dashed-border separator goes on a group div, never on a button directly -
+  // that class assumes a group-div's box model and strips borders/padding meant for
+  // separators when applied to a button (e.g. under the compact-editor addon).
+  const makeGroup = (...items) => {
+    const group = document.createElement("div");
+    group.append(...items);
+    return group;
+  };
+  const booleanOpsGroup = makeGroup(uniteBtn, subtractBtn, intersectBtn);
+  const compoundGroup = makeGroup(compoundBtn);
+  const expandGroup = makeGroup(expandBtn);
+  shapingSection.append(booleanOpsGroup, compoundGroup, expandGroup);
 
   // ── Click handler ─────────────────────────────────────────────────────
   // Routes clicks on any [data-sa-op] element to the correct operation.
@@ -102,10 +115,13 @@ export default async function ({ addon, msg }) {
   const allMoreItems = [moreUniteBtn, moreSubtractBtn, moreIntersectBtn, moreCompoundBtn, moreExpandBtn];
 
   // ── Enable/disable buttons based on current paper.js selection ─────────
-  // Schedules updateButtonStates after React's next two paint frames. This is
-  // necessary because triggerUpdateImage() round-trips through Redux, resetting
-  // paper.js selectedItems — we must read selection only after that settles.
-  const deferUpdateButtonStates = () => requestAnimationFrame(() => requestAnimationFrame(updateButtonStates));
+  // Runs fn after React's next two paint frames. This is necessary because
+  // triggerUpdateImage() round-trips through Redux, resetting paper.js
+  // selectedItems — callers must read selection only after that settles.
+  const afterReduxRoundTrip = (fn) => requestAnimationFrame(() => requestAnimationFrame(fn));
+
+  // Schedules updateButtonStates once the round-trip above has settled.
+  const deferUpdateButtonStates = () => afterReduxRoundTrip(updateButtonStates);
 
   // Reads the current paper.js selection and enables or disables each button
   // accordingly. Also morphs the Combine/Release and Open/Close buttons.
@@ -168,14 +184,15 @@ export default async function ({ addon, msg }) {
     moreCompoundBtn.dataset.saOp = compoundOp;
     moreCompoundBtn.querySelector("img").src = `${addon.self.dir}/icons/${compoundOp}.svg`;
     moreCompoundBtn.querySelector("span").textContent = msg(compoundOp);
-    // Open/Close button morphs: "Open Path" when selection is closed, "Close Path" when open.
+    // Open/Close button morphs: "Open Shape" when selection is closed, "Close Shape" when open.
     const paths = sel.filter((item) => item instanceof paper.Path);
     const allOpen = paths.length > 0 && paths.every((p) => !p.closed);
-    const openCloseLabel = allOpen ? msg("close-path") : msg("open-path");
+    const openCloseLabel = allOpen ? msg("close-shape") : msg("open-shape");
+    const openCloseDesc = allOpen ? msg("close-shape-desc") : msg("open-shape-desc");
     // Update the mode-tools context bar button if it exists.
     if (modeToolsOCLbl) modeToolsOCLbl.textContent = openCloseLabel;
     if (modeToolsOCBtn) {
-      modeToolsOCBtn.title = openCloseLabel;
+      modeToolsOCBtn.title = openCloseDesc;
       if (modDisabledClass) modeToolsOCBtn.classList.toggle(modDisabledClass, !hasPaths);
     }
     if (modDisabledClass) compoundBtn.classList.toggle(modDisabledClass, !(totalCount >= 2 || hasCompound));
@@ -605,6 +622,7 @@ export default async function ({ addon, msg }) {
   // ── Trigger scratch-paint undo snapshot ───────────────────────────────────
   // Walks up the React fiber tree to call handleUpdateImage(), which commits
   // the current paper.js canvas state to Redux and records an undo entry.
+  // Also refreshes the bounding-box handles, since a boolean op can resize them.
   const triggerUpdateImage = () => {
     const canvasContainer = document.querySelector("[class*='paint-editor_canvas-container_']");
     if (!canvasContainer) return;
@@ -615,6 +633,8 @@ export default async function ({ addon, msg }) {
     if (typeof fiber?.stateNode?.handleUpdateImage === "function") {
       fiber.stateNode.handleUpdateImage();
     }
+    // Same refresh mechanism scratch-paint uses after zooming.
+    afterReduxRoundTrip(() => addon.tab.redux.dispatch({ type: "scratch-paint/select/REDRAW_SELECTION_BOX" }));
   };
 
   // ── Open/Close button in the mode-tools context bar ───────────────────
@@ -641,7 +661,7 @@ export default async function ({ addon, msg }) {
     modeToolsOCIcon.draggable = false;
     modeToolsOCIcon.src = `${addon.self.dir}/icons/open-close.svg`;
     modeToolsOCLbl = document.createElement("span");
-    modeToolsOCLbl.textContent = msg("open-path");
+    modeToolsOCLbl.textContent = msg("open-shape");
     modeToolsOCBtn.appendChild(modeToolsOCIcon);
     modeToolsOCBtn.appendChild(modeToolsOCLbl);
     modeToolsOCBtn.addEventListener("click", () => {
@@ -708,11 +728,17 @@ export default async function ({ addon, msg }) {
     inlineIconSelector: ".sa-shaping-item-icon",
     inlineLabelSelector: ".sa-shaping-item-label",
     overflowItems: allMoreItems,
-    onNativeClasses: ({ dashedBorderClass: nativeDashedBorderClass, disabledClass }) => {
+    onNativeClasses: ({ dashedBorderClass: nativeDashedBorderClass, disabledClass, inputGroupClasses }) => {
       dashedBorderClass = nativeDashedBorderClass;
+      if (inputGroupClasses.length) {
+        booleanOpsGroup.classList.add(...inputGroupClasses);
+        compoundGroup.classList.add(...inputGroupClasses);
+        expandGroup.classList.add(...inputGroupClasses);
+      }
+      // Separates the boolean-set ops group and the compound group from the one after it.
       if (dashedBorderClass) {
-        intersectBtn.classList.add(dashedBorderClass);
-        compoundBtn.classList.add(dashedBorderClass);
+        booleanOpsGroup.classList.add(dashedBorderClass);
+        compoundGroup.classList.add(dashedBorderClass);
       }
       if (disabledClass) modDisabledClass = disabledClass;
     },
