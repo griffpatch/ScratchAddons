@@ -334,7 +334,7 @@ function _renderBlock(block, container, parentCategory, isVertical) {
         const colorValue =
           typeof blockInput === "string" && /^#[0-9a-fA-F]{6}$/.test(blockInput)
             ? blockInput
-            : (blockPart.defaultValue ?? "#ff6680");
+            : blockPart.defaultValue ?? "#ff6680";
         component = createBackedTextedComponent(
           "",
           blockContainer,
