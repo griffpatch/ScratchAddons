@@ -680,21 +680,21 @@ export default async function ({ addon, msg }) {
   buildModeToolsBtn();
 
   // ── Mode-tools injection ──────────────────────────────────────────────────
-  // Reshape's mode-tools bar is separate from the fixed toolbar/More menu.
-  // Watching the fixed toolbar caused Open/Close to appear only after More opened.
+  // Open/Close belongs to Reshape's sub-toolbar, which changes independently
+  // of the fixed toolbar/More menu, so we watch it separately.
   const modeToolsGroupSelector = "[class*='mode-tools_mode-tools_'] [class*='mode-tools_mod-dashed-border_']";
   const isReshapeState = (state) =>
     state?.scratchGui?.editorTab?.activeTabIndex === 1 &&
     !state.scratchGui?.mode?.isPlayerOnly &&
     state.scratchPaint?.mode === "RESHAPE";
-  const isReshapeActive = () => !addon.self.disabled && isReshapeState(addon.tab.redux.state);
+  const showOpenCloseButton = () => !addon.self.disabled && isReshapeState(addon.tab.redux.state);
 
   const removeModeToolsBtn = () => {
     modeToolsOCBtn.remove();
   };
 
   const injectModeToolsBtn = (dashedGroup) => {
-    if (!isReshapeActive() || !dashedGroup) {
+    if (!showOpenCloseButton() || !dashedGroup) {
       removeModeToolsBtn();
       return;
     }
@@ -729,7 +729,7 @@ export default async function ({ addon, msg }) {
     while (true) {
       const dashedGroup = await addon.tab.waitForElement(modeToolsGroupSelector, {
         markAsSeen: true,
-        condition: isReshapeActive,
+        condition: showOpenCloseButton,
         reduxCondition: isReshapeState,
       });
       injectModeToolsBtn(dashedGroup);
