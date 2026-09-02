@@ -16,8 +16,8 @@ import {
 } from "./paper-helpers.js";
 
 export default async function ({ addon, msg }) {
-  // Watch Redux so the button follows the Costume editor's active paint tool.
-  addon.tab.redux.initialize();
+  // Wait for Redux before reading the active paint tool or listening for changes.
+  await addon.tab.redux.initialize();
   // Wait until Scratch's generated More-menu disabled class is available.
   await addon.tab.scratchClassReady();
 
