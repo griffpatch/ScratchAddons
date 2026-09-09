@@ -104,6 +104,24 @@
     return values.length === 1 ? values[0] : null; // null = mixed
   };
 
+  const paper = await addon.tab.traps.getPaper();
+  const rememberSelectedStyle = () => {
+    if (addon.self.disabled) return;
+    const items = getSelectedStrokeItems(paper);
+    // Keep each common style for the next shape. An empty or mixed selection
+    // should leave that setting as it was.
+    defaultJoin = getCommonProp(items, "strokeJoin") ?? defaultJoin;
+    defaultCap = getCommonProp(items, "strokeCap") ?? defaultCap;
+  };
+  addon.tab.redux.addEventListener("statechanged", ({ detail }) => {
+    if (detail.action.type === "scratch-paint/select/CHANGE_SELECTED_ITEMS") {
+      // Read the styles now, before switching tools clears the Paper selection.
+      rememberSelectedStyle();
+    }
+  });
+  addon.self.addEventListener("reenabled", rememberSelectedStyle);
+  rememberSelectedStyle();
+
   // ── Main loop — re-runs every time the color picker popup reopens ─────────
   while (true) {
     const swatchRow = await addon.tab.waitForElement('div[class*="color-picker_swatch-row_"]', {
