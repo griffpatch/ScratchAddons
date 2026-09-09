@@ -111,7 +111,9 @@ export const getPaintingSelected = (paper) =>
               item.segments[0].point.getDistance(item.segments[item.segments.length - 1].point) < 0.01))) ||
           item instanceof paper.CompoundPath)
     )
-    .sort((a, b) => a.index - b.index);
+    // Indices only order siblings. Paper's comparison includes their parent
+    // groups, so the backmost shape supplies the style even across groups.
+    .sort((a, b) => (a.isBelow(b) ? -1 : a.isAbove(b) ? 1 : 0));
 
 // Returns the top-level selected items on the painting layer, back-to-front.
 // Groups are treated as one unit; child paths inside a Group are excluded.
