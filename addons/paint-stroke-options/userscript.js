@@ -52,10 +52,30 @@
   });
   handleModeChange();
 
+  const getSelectedStrokeItems = (paper) => {
+    const items = new Set();
+    for (const item of paper.project.selectedItems) {
+      // Reshape can select a child without selecting its group. Use the selected
+      // shapes, as Scratch's outline width control does, and ignore selection helpers.
+      if (
+        item instanceof paper.Layer ||
+        item instanceof paper.Group ||
+        item.data?.isSelectionBound ||
+        item.data?.isHelperItem
+      ) {
+        continue;
+      }
+      // Compound path children share their parent's style. Several selected
+      // children can refer to the same parent, so only include it once.
+      items.add(item.parent instanceof paper.CompoundPath ? item.parent : item);
+    }
+    return [...items];
+  };
+
   // ── Apply a paper.js stroke property to all selected items ────────────────
   const applyProp = async (prop, value) => {
     const paper = await addon.tab.traps.getPaper();
-    const items = paper.project.selectedItems.filter((item) => item.parent instanceof paper.Layer);
+    const items = getSelectedStrokeItems(paper);
     if (items.length === 0) return;
     for (const item of items) {
       item[prop] = value;
@@ -76,10 +96,10 @@
   };
 
   // ── Read current common value across all selected items ───────────────────
-  const getCommonProp = async (prop) => {
-    const paper = await addon.tab.traps.getPaper();
-    const items = paper.project.selectedItems.filter((item) => item.parent instanceof paper.Layer);
-    if (items.length === 0) return null;
+  const getCommonProp = (items, prop, defaultValue) => {
+    // Defaults describe the next shape only when nothing is selected.
+    // Mixed selections have no active button until the user chooses a style.
+    if (items.length === 0) return defaultValue;
     const values = [...new Set(items.map((i) => i[prop]))];
     return values.length === 1 ? values[0] : null; // null = mixed
   };
@@ -165,13 +185,13 @@
 
     // ── Active state ──────────────────────────────────────────────────────
     const updateActive = async () => {
-      const currentJoin = await getCommonProp("strokeJoin");
-      const currentCap = await getCommonProp("strokeCap");
+      const paper = await addon.tab.traps.getPaper();
+      const items = getSelectedStrokeItems(paper);
+      const currentJoin = getCommonProp(items, "strokeJoin", defaultJoin);
+      const currentCap = getCommonProp(items, "strokeCap", defaultCap);
       for (const btn of wrapper.querySelectorAll(".sa-stroke-opt-btn")) {
         const active =
-          btn.dataset.saOp === "join"
-            ? btn.dataset.saVal === (currentJoin ?? defaultJoin)
-            : btn.dataset.saVal === (currentCap ?? defaultCap);
+          btn.dataset.saOp === "join" ? btn.dataset.saVal === currentJoin : btn.dataset.saVal === currentCap;
         btn.classList.toggle("sa-stroke-opt-active", active);
       }
     };
